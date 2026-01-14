@@ -20,6 +20,31 @@ The goal is to show how a real-world backend service could safely expose Claude�
 ## 2. High-Level Architecture
 ![alt text](image.png)
 
+computer-use-demo/
+├── computer_use_demo/
+│   ├── api/
+│   │   ├── main.py
+│   │   ├── db.py
+│   │   ├── worker_manager.py
+│   │   └── ...
+│   ├── worker_api_service/
+│   │   └── main.py
+│   └── streamlit.py
+│
+├── demo/
+│   └── concurrency_demo.sh
+│
+├── image/
+│   └── entrypoint.sh
+│
+├── Dockerfile
+├── README.md        <-- el que escribiste
+├── README_CHALLENGE.md (opcional, si quieres separar)
+├── LICENSE
+├── pyproject.toml
+└── .gitignore
+
+
 ### Key properties
 
 - One worker container per session
