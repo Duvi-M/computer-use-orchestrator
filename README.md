@@ -20,28 +20,34 @@ The goal is to show how a real-world backend service could safely expose Claude�
 ## 2. High-Level Architecture
 ![alt text](image.png)
 
+
+## Project Structure
+
 computer-use-demo/
 ├── computer_use_demo/
-│   ├── api/
-│   │   ├── main.py
-│   │   ├── db.py
-│   │   ├── worker_manager.py
-│   │   └── ...
-│   ├── worker_api_service/
-│   │   └── main.py
-│   └── streamlit.py
+│   ├── api/                          # Orchestrator (FastAPI)
+│   │   ├── main.py                   # Session lifecycle, SSE proxy, cleanup, persistence
+│   │   ├── db.py                     # SQLite persistence (sessions, messages, events)
+│   │   ├── worker_manager.py         # Docker worker lifecycle (start / stop)
+│   │   └── __init__.py
+│   │
+│   ├── worker_api_service/           # Worker API (inside each container)
+│   │   └── main.py                   # SSE producer + message handler (per session)
+│   │
+│   ├── streamlit.py                  # Claude Computer Use UI (per worker)
+│   └── __init__.py
 │
 ├── demo/
-│   └── concurrency_demo.sh
+│   └── concurrency_demo.sh           # Demonstrates parallel sessions (Dubai / Tokyo)
 │
 ├── image/
-│   └── entrypoint.sh
+│   └── entrypoint.sh                 # Worker container startup (VNC, Streamlit, API)
 │
-├── Dockerfile
-├── README.md        <-- el que escribiste
-├── README_CHALLENGE.md (opcional, si quieres separar)
-├── LICENSE
-├── pyproject.toml
+├── Dockerfile                        # Worker container image
+├── README.md                         # Project documentation (this file)
+├── README_CHALLENGE.md               # Optional challenge-specific notes
+├── LICENSE                           # MIT (Anthropic original license)
+├── pyproject.toml                    # Tooling and lint configuration
 └── .gitignore
 
 
