@@ -1,6 +1,6 @@
 # CambioML Coding Challenge
 
-## Backend / Orchestrator – Claude Computer Use
+## Backend / Orchestrator – Claude Computer Use (Multi-Session, Concurrent)
 
 Author: Duvan Mendoza
 Role: Backend Engineer
@@ -38,7 +38,7 @@ computer-use-demo/
 │   └── __init__.py
 │
 ├── demo/
-│   └── concurrency_demo.sh           # Demonstrates parallel sessions (Dubai / Tokyo)
+│   └── rrency_demo.sh           # Demonstrates parallel sessions (Dubai / Tokyo)
 │
 ├── image/
 │   └── entrypoint.sh                 # Worker container startup (VNC, Streamlit, API)
@@ -177,6 +177,10 @@ demo/concurrency_demo.sh
 - Two independent worker containers
 - Concurrent SSE streams
 - No cross-session interference
+
+This demo explicitly demonstrates **Use Case 2** from the challenge requirements:
+multiple concurrent sessions running in parallel without race conditions.
+
 
 ### Run the demo
 
