@@ -179,6 +179,7 @@ demo/concurrency_demo.sh
 - No cross-session interference
 
 This demo explicitly demonstrates **Use Case 2** from the challenge requirements:
+
 multiple concurrent sessions running in parallel without race conditions.
 
 
