@@ -1,59 +1,70 @@
 # Claude Computer Use Session Orchestrator
 
-A FastAPI-based orchestration backend for running isolated Claude Computer Use
-agent sessions with real-time events, noVNC screen access, Dockerized workers,
-and persistent session history.
+A session-oriented FastAPI backend for running isolated Claude Computer Use
+workers with real-time event streaming, noVNC desktop access, Docker-based
+worker lifecycle management, and persistent session history.
 
-This is a personal engineering project exploring how Operator-style
-computer-use agents can be managed through a backend architecture instead of a
-single-user Streamlit demo.
+This project explores how Operator-style computer-use agents can be managed as
+backend workloads instead of as a single-user demo. Each session gets its own
+desktop worker, can be observed through noVNC, streams progress through SSE, and
+stores messages/events for later debugging.
 
-## Motivation
+> Prototype status: production-style architecture and tests, but not hardened
+> for untrusted or public deployments.
 
-Computer-use agents are most useful when they can be started, isolated,
-observed, and stopped like real backend workloads. This project takes
-Anthropic's Computer Use demo stack and wraps it with a session-oriented
-orchestrator:
+## Highlights
 
-- one isolated desktop worker per session
-- FastAPI APIs for session lifecycle and task submission
-- Server-Sent Events for real-time progress
-- noVNC for observing the virtual desktop
-- SQLite persistence for session history and debugging
+- Isolated per-session worker containers managed by a FastAPI orchestrator
+- Real-time Server-Sent Events for agent progress, screenshots, tool calls, and
+  completion/error states
+- Browser-accessible noVNC desktop for observing each running worker
+- SQLite-backed session, message, status, error, and event persistence
+- Dependency-free HTML/CSS/JavaScript frontend for local demos
+- Focused backend tests with mocked worker behavior
+- Reuses Anthropic Computer Use loop/tools instead of reimplementing the agent
+  runtime
 
-It is a working prototype with production-style boundaries, not a hardened
-production platform.
+## Why This Exists
+
+Computer-use agents become more useful when they can be started, isolated,
+observed, stopped, and debugged like real backend workloads. The original demo
+stack is valuable for experimentation, but it is centered around one local
+session. This repository wraps that idea with a small orchestration layer:
+
+- create and delete sessions through an API
+- allocate a dedicated Docker worker for each session
+- forward user tasks to the worker API
+- stream live worker events back to the frontend
+- persist history so completed sessions can be inspected later
+- expose each worker desktop through noVNC
+
+The goal is not to claim this is a finished platform. The goal is to show the
+backend shape needed to move computer-use agents toward multi-session,
+observable workflows.
 
 ## Architecture
 
 ```text
-HTML/JS Frontend
-    ↓
-FastAPI Orchestrator
-    ↓
-Per-session Docker Worker
-    ↓
-Anthropic Computer Use loop/tools
-    ↓
-SSE events + noVNC screen access
+HTML/JS frontend
+    |
+    | REST + SSE
+    v
+FastAPI orchestrator
+    |
+    | Docker worker lifecycle
+    v
+Per-session worker container
+    |
+    | Anthropic Computer Use loop/tools
+    v
+Virtual desktop + noVNC + worker events
+
+SQLite stores sessions, messages, statuses, errors, and event history.
 ```
 
-The primary interface is the dependency-free frontend under `web/`. Streamlit is
-kept only as legacy/debug reference code and is not part of the main flow.
-
-## Features
-
-- FastAPI orchestrator backend
-- Session lifecycle APIs
-- One isolated worker container per session
-- Real-time Server-Sent Events streaming
-- noVNC desktop access for each worker
-- SQLite persistence for sessions, messages, status, errors, and events
-- Basic HTML/CSS/JavaScript frontend
-- Docker-based local workflow
-- Focused backend tests with mocked worker behavior
-- Anthropic Computer Use loop/tools reused instead of reimplemented
-- Streamlit retained only as legacy/debug code
+The primary interface is the dependency-free frontend under `web/`. The
+Streamlit code is retained only as legacy/debug reference code and is not part
+of the main flow.
 
 ## Tech Stack
 
@@ -65,6 +76,7 @@ kept only as legacy/debug reference code and is not part of the main flow.
 - VNC / noVNC
 - Anthropic Claude Computer Use stack
 - HTML, CSS, JavaScript
+- pytest
 
 ## Repository Structure
 
@@ -75,18 +87,18 @@ kept only as legacy/debug reference code and is not part of the main flow.
 │   │   ├── main.py              # FastAPI orchestrator
 │   │   ├── db.py                # SQLite persistence helpers
 │   │   └── worker_manager.py    # Docker worker lifecycle
-│   ├── worker_api.py            # Primary Worker FastAPI API
+│   ├── worker_api.py            # Primary worker FastAPI API
 │   ├── worker_api_service/      # Lightweight echo/SSE stub for experiments
 │   ├── loop.py                  # Anthropic Computer Use sampling loop
 │   ├── streamlit.py             # Legacy/debug UI, not primary flow
-│   └── tools/                   # Computer, bash, and edit tools
+│   └── tools/                   # Computer, bash, edit, and run tools
 ├── demo/
-│   └── concurrency_demo.sh
+│   └── concurrency_demo.sh      # Manual multi-session demo helper
 ├── image/                       # Worker desktop/noVNC startup scripts
-├── tests/
+├── tests/                       # Backend and worker tests
 ├── web/                         # Primary HTML/JS frontend
 ├── Dockerfile                   # Worker image
-├── Dockerfile.orchestrator      # Orchestrator container image
+├── Dockerfile.orchestrator      # Orchestrator image
 ├── docker-compose.yml
 ├── requirements.txt
 ├── dev-requirements.txt
@@ -138,7 +150,7 @@ Start the frontend in another terminal:
 python -m http.server 5173 -d web
 ```
 
-Open:
+Open the app:
 
 ```text
 http://127.0.0.1:5173
@@ -178,18 +190,23 @@ Open Firefox and search for the current weather in Tokyo.
 ```
 
 6. Watch real-time events in the frontend:
-   - `user_message`
-   - `assistant_block`
-   - `tool_use_start`
-   - `tool_result`
-   - `screenshot`
-   - `done`
-   - `error`
+
+```text
+user_message
+assistant_block
+tool_use_start
+tool_result
+screenshot
+done
+error
+```
+
 7. Refresh the browser and click `History` to reload persisted events.
 8. Create a second session to verify independent worker containers.
 
-The frontend stores recent session IDs in local browser storage. Use `Clear local`
-if the backend has been restarted and old sessions no longer exist.
+The frontend stores recent session IDs in local browser storage. Use
+`Clear local` if the backend has been restarted and old sessions no longer
+exist.
 
 ## API Overview
 
@@ -217,13 +234,13 @@ events from SQLite.
 
 ## Testing
 
-Focused backend tests:
+Run the focused backend suite:
 
 ```bash
 python -B -m pytest -q tests/test_api_app.py tests/test_db.py tests/test_orchestrator_sessions.py tests/test_worker_api.py
 ```
 
-Full suite:
+Run all tests:
 
 ```bash
 pytest
@@ -231,9 +248,9 @@ pytest
 
 The worker tests use mocks and do not call the real Anthropic API.
 
-## Demo Script
+## Demo Flow
 
-A concise five-minute demo:
+A concise five-minute portfolio demo:
 
 1. Show the architecture diagram.
 2. Start Docker, the orchestrator, and the frontend.
@@ -243,13 +260,14 @@ A concise five-minute demo:
 6. Show live SSE events and desktop activity.
 7. Create Session B and send a different task.
 8. Show both sessions have independent containers.
-9. Refresh the frontend and load History.
-10. Show focused tests passing.
+9. Refresh the frontend and load `History`.
+10. Show the focused tests passing.
 
 ## Known Limitations
 
 - SQLite is used for local/demo persistence.
-- Active worker reattachment after orchestrator restart is not fully implemented.
+- Active worker reattachment after orchestrator restart is not fully
+  implemented.
 - Docker socket mounting is convenient locally but requires hardening in
   production-like deployments.
 - Real Claude execution requires a valid Anthropic API key.
