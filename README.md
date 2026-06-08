@@ -13,6 +13,35 @@ quality: lifecycle management, reliable cleanup, config validation, local
 security boundaries, observability, and testable failure paths. It is not a
 hardened SaaS platform.
 
+## Project Status
+
+Current status: working local production-style prototype.
+
+What works today:
+
+- FastAPI orchestrator for session, message, history, health, and readiness APIs.
+- One Docker worker container per session.
+- Real Claude Computer Use execution inside each worker.
+- Server-Sent Events for real-time agent events.
+- noVNC desktop access for observing worker sessions.
+- SQLite-backed session history.
+- Focused portfolio test suite for orchestrator/backend behavior.
+
+Known limitations:
+
+- Docker socket access is a local trust boundary and should not be exposed.
+- SQLite persistence is local-first and not designed for multi-user production.
+- Full restart recovery and worker reattachment are not implemented.
+- Production auth is off by default unless `ORCHESTRATOR_API_TOKEN` is set.
+
+Next planned improvements:
+
+- Stronger security hardening around worker launch and exposed local ports.
+- Worker lifecycle recovery after orchestrator restart.
+- Richer observability, logging, and optional metrics.
+- CI/deployment polish for reproducible demos.
+- More polished frontend timeline states and screenshots/GIF assets.
+
 ## Architecture
 
 ```mermaid
@@ -173,8 +202,13 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | `CORS_ALLOWED_ORIGINS` | localhost frontend origins | Comma-separated CORS allowlist. |
 | `CLEANUP_ORPHAN_WORKERS_ON_STARTUP` | `false` | Remove project-labeled workers at startup. |
 | `SESSION_TTL_SECONDS` | `300` | Idle session cleanup threshold. |
+| `CLEANUP_EVERY_SECONDS` | `30` | Background session cleanup interval. |
 | `WORKER_READY_TIMEOUT_SECONDS` | `25.0` | Worker readiness timeout. |
+| `WORKER_READY_POLL_SECONDS` | `0.5` | Worker readiness polling interval. |
+| `WORKER_STATUS_POLL_SECONDS` | `2.0` | Worker task status polling interval. |
 | `SSE_RETRY_LIMIT` | `3` | Worker SSE reconnect attempts before surfacing an error. |
+| `SSE_RETRY_INITIAL_BACKOFF_SECONDS` | `0.25` | Initial worker SSE reconnect backoff. |
+| `SSE_RETRY_MAX_BACKOFF_SECONDS` | `3.0` | Maximum worker SSE reconnect backoff. |
 | `WORKER_CPU_LIMIT` | `1.0` | `docker run --cpus` value for each worker. |
 | `WORKER_MEMORY_LIMIT` | `2g` | `docker run --memory` value for each worker. |
 | `WORKER_PIDS_LIMIT` | `512` | `docker run --pids-limit` value for each worker. |
@@ -287,12 +321,16 @@ text, reviewer names, or browser tabs with personal information.
 
 ## Future Roadmap
 
+- Security hardening around Docker socket access, VNC/noVNC exposure, and local
+  token handling.
 - Reattach or reconcile active workers after orchestrator restart.
 - Add migrations and PostgreSQL option for longer-running deployments.
 - Add a worker-launch sidecar or Docker API proxy to reduce socket exposure.
 - Add richer event timeline with screenshot thumbnails and task duration.
 - Add WebSocket streaming alternative for clients that prefer bidirectional flows.
 - Add structured metrics/tracing behind an optional local flag.
+- Add deployment notes for a safer single-host demo environment.
+- Add portfolio screenshots and a short two-session GIF.
 - Add packaging for reproducible demo releases.
 
 ## Additional Docs
