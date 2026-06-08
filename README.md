@@ -201,7 +201,10 @@ endpoints are protected when `ORCHESTRATOR_API_TOKEN` is configured.
 
 ```bash
 make install        # Create .venv and install runtime/dev dependencies
-make test           # Run focused unit tests
+make test           # Run the default orchestrator/backend test suite
+make test-project   # Run the same focused project tests explicitly
+make test-legacy    # Run legacy upstream Anthropic/Streamlit/tool tests
+make test-all       # Run project tests, then legacy tests
 make smoke-local    # Check API health/readiness and frontend HTML
 make build-worker   # Build the per-session worker image
 make run-api        # Start the FastAPI orchestrator on 127.0.0.1:9000
@@ -210,10 +213,47 @@ make clean-workers  # Remove Docker workers labeled cambioml=orchestrator
 make clean-local    # Remove local test/lint/cache artifacts
 ```
 
+## Testing
+
+The default test command is intentionally focused on this repository's
+orchestrator/backend behavior:
+
+```bash
+make test
+# equivalent to:
+python3 -B -m pytest -q
+```
+
+Pytest is configured to collect `tests/test_*.py`, which keeps the portfolio CI
+suite centered on the FastAPI orchestrator, SQLite persistence, worker manager,
+SSE formatting, config validation, and security/reliability paths.
+
+The repository also contains legacy upstream Anthropic Computer Use tests:
+
+- `tests/loop_test.py`
+- `tests/streamlit_test.py`
+- `tests/tools/*`
+
+Those tests are useful when working on the vendored Computer Use demo internals,
+but they require optional upstream dependencies such as `anthropic` and
+`streamlit`. They are excluded from default collection so a clean local clone can
+verify the orchestration project without installing the full upstream demo stack.
+Run them explicitly with:
+
+```bash
+make test-legacy
+```
+
+To run both suites in order:
+
+```bash
+make test-all
+```
+
 ## 5-Minute Demo Script
 
 1. Show the architecture diagram and explain one worker container per session.
-2. Run `make test` to show the focused test suite.
+2. Run `make test` to show the focused orchestrator/backend test suite.
 3. Start Docker, then run `make build-worker`.
 4. Start the API with `make run-api` and the frontend with `make run-web`.
 5. Open `http://127.0.0.1:5173`.

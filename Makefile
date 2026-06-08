@@ -1,4 +1,7 @@
-.PHONY: install test smoke-local build-worker run-api run-web clean-workers clean-local
+.PHONY: install test test-project test-legacy test-all smoke-local build-worker run-api run-web clean-workers clean-local
+
+PROJECT_TESTS := tests/test_api_app.py tests/test_config.py tests/test_db.py tests/test_orchestrator_sessions.py tests/test_worker_api.py tests/test_worker_manager.py
+LEGACY_TESTS := tests/loop_test.py tests/streamlit_test.py tests/tools
 
 install:
 	python3 -m venv .venv
@@ -6,7 +9,18 @@ install:
 	.venv/bin/pip install -r dev-requirements.txt
 
 test:
-	.venv/bin/python -B -m pytest -q tests/test_api_app.py tests/test_config.py tests/test_db.py tests/test_orchestrator_sessions.py tests/test_worker_api.py tests/test_worker_manager.py
+	.venv/bin/python -B -m pytest -q
+
+test-project:
+	.venv/bin/python -B -m pytest -q $(PROJECT_TESTS)
+
+test-legacy:
+	@echo "Legacy Anthropic Computer Use tests require optional upstream dependencies such as anthropic and streamlit."
+	.venv/bin/python -B -m pytest -q -o "python_files=test_*.py *_test.py" $(LEGACY_TESTS)
+
+test-all:
+	$(MAKE) test-project
+	$(MAKE) test-legacy
 
 smoke-local:
 	.venv/bin/python -B scripts/smoke_local.py
