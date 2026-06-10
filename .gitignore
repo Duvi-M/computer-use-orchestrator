@@ -32,6 +32,8 @@ env/
 *.log
 logs/
 data/
+artifacts/
+*.artifact
 *.db
 *.sqlite
 *.sqlite3

@@ -1,381 +1,135 @@
 # Claude Computer Use Session Orchestrator
 
-<!-- Add a GitHub Actions CI badge here after the repository and workflow URL are public/stable. -->
+A production-style FastAPI orchestration prototype for running Claude Computer
+Use as isolated, session-based backend workloads. The system creates one Docker
+desktop worker per session, streams agent activity over SSE, exposes the worker
+desktop through noVNC, and persists history in SQLite or PostgreSQL.
 
-A production-style FastAPI orchestration prototype for running isolated Claude
-Computer Use sessions as backend workloads. It creates one Dockerized desktop
-worker per session, streams real-time agent events through SSE, exposes the
-worker desktop through noVNC, and persists session history in SQLite for
-debugging and demos.
+This is not a hosted SaaS yet. It is a SaaS-oriented backend architecture
+exercise: tenancy, ownership checks, lifecycle limits, protected UI access,
+worker-launch abstraction, observability, migrations, and retention foundations
+are implemented while preserving a simple local demo.
 
-This is a personal AI infrastructure project focused on backend engineering
-quality: lifecycle management, reliable cleanup, config validation, local
-security boundaries, observability, and testable failure paths. It is not a
-hardened SaaS platform.
+## Why It Exists
 
-## Project Status
+Computer-use agents are expensive, stateful, and operationally risky. They need
+more than a chat endpoint: they need worker isolation, session lifecycle
+controls, event streaming, desktop access, auditability, retention policy, and
+clear security boundaries. This repo keeps those concerns visible without
+prematurely adding Kubernetes, queues, billing, or a frontend framework.
 
-Current status: working local production-style prototype.
+## What Works Today
 
-What works today:
-
-- FastAPI orchestrator for session, message, history, health, and readiness APIs.
-- One Docker worker container per session.
-- Real Claude Computer Use execution inside each worker.
-- Server-Sent Events for real-time agent events.
-- noVNC desktop access for observing worker sessions.
-- SQLite-backed session history.
-- Focused portfolio test suite for orchestrator/backend behavior.
-
-Known limitations:
-
-- Docker socket access is a local trust boundary and should not be exposed.
-- SQLite persistence is local-first and not designed for multi-user production.
-- Full restart recovery and worker reattachment are not implemented.
-- Production auth is off by default unless `ORCHESTRATOR_API_TOKEN` is set.
-
-Next planned improvements:
-
-- Stronger security hardening around worker launch and exposed local ports.
-- Worker lifecycle recovery after orchestrator restart.
-- Richer observability, logging, and optional metrics.
-- CI/deployment polish for reproducible demos.
-- More polished frontend timeline states and screenshots/GIF assets.
+- FastAPI orchestrator with session, message, history, health, readiness,
+  metrics, admin, UI-token, and retention endpoints.
+- Dependency-free HTML/JS demo frontend.
+- One local Docker worker container per session.
+- Claude Computer Use execution inside the worker.
+- SSE event proxying and persistence.
+- noVNC desktop access through ownership-checked orchestrator URLs.
+- Local dev auth adapter with users, organizations, memberships, and ownership
+  checks.
+- Session limits, runtime/idle expiration, message/event quotas, kill switches,
+  and worker cleanup.
+- Worker lifecycle behind a `WorkerLauncher` protocol with
+  `LocalDockerWorkerLauncher`.
+- SQLite default persistence plus PostgreSQL/Alembic production path.
+- Artifact metadata and retention cleanup foundation.
+- Focused tests for auth, limits, UI tokens, launcher behavior, observability,
+  database config, migrations, retention, and worker APIs.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U["Browser UI<br/>HTML/CSS/JS"] -->|"REST + SSE"| O["FastAPI Orchestrator"]
-    O -->|"docker run / rm"| D["Docker Engine"]
-    D --> W1["Worker Container<br/>Session A"]
-    D --> W2["Worker Container<br/>Session B"]
-    W1 --> C1["Claude Computer Use<br/>loop + tools"]
-    W2 --> C2["Claude Computer Use<br/>loop + tools"]
-    W1 --> V1["Virtual Desktop<br/>VNC / noVNC"]
-    W2 --> V2["Virtual Desktop<br/>VNC / noVNC"]
-    O --> DB[("SQLite<br/>sessions / messages / events")]
+    Browser["Browser frontend<br/>HTML / JS"] -->|"REST"| API["FastAPI orchestrator"]
+    Browser -->|"SSE events"| API
+    Browser -->|"Open noVNC"| UI["/sessions/{id}/ui<br/>ownership/token checked"]
+
+    API --> Auth["Local auth / tenancy<br/>X-User-Id + X-Org-Id"]
+    API --> Limits["Session limits<br/>quotas + lifecycle"]
+    API --> DB[("SQLite local<br/>or PostgreSQL")]
+    API --> Retention["Retention cleanup<br/>artifact metadata"]
+    API --> Launcher["WorkerLauncher protocol"]
+
+    Launcher --> LocalDocker["LocalDockerWorkerLauncher"]
+    LocalDocker --> Docker["Docker Engine"]
+    Docker --> Worker["One worker container<br/>per session"]
+
+    Worker --> Claude["Claude Computer Use<br/>loop + tools"]
+    Worker --> Desktop["Virtual desktop<br/>VNC / noVNC"]
+    Worker -->|"SSE"| API
+    Worker -->|"screenshots/events"| API
+
+    Retention --> Artifacts["Local artifact storage<br/>future S3/object store"]
+    UI --> Desktop
 ```
 
-Text fallback:
+Text flow:
 
 ```text
-HTML/JS frontend
-  -> FastAPI orchestrator
-  -> one Docker worker per session
-  -> Claude Computer Use loop/tools
-  -> SSE events + noVNC desktop
-  -> SQLite session history
+Frontend -> FastAPI orchestrator -> WorkerLauncher -> Docker worker
+         -> Claude Computer Use -> SSE/noVNC -> SQLite/Postgres history
 ```
 
-## Engineering Highlights
-
-- Session-oriented FastAPI API for create/get/delete/message/history flows.
-- One isolated desktop worker container per session.
-- Real-time Server-Sent Events proxying and persistence.
-- noVNC access to observe the virtual desktop while the agent works.
-- SQLite-backed session, message, status, error, and event history.
-- Config module with validation for tokens, worker image, limits, timeouts, and CORS.
-- Worker CPU, memory, and PID limits for safer local demos.
-- Label-scoped worker cleanup to avoid deleting unrelated containers.
-- Optional bearer token protection for session-scoped orchestrator endpoints.
-- Optional VNC password support while preserving the passwordless local demo.
-- Structured local-dev logs for startup, worker lifecycle, SSE, task duration, and failures.
-- Focused tests with mocked worker and Anthropic behavior.
-
-## Tradeoffs
-
-- SQLite is intentionally used for a local/demo persistence layer. PostgreSQL
-  would be the natural next step for multi-user or long-running deployments.
-- Docker socket access keeps the prototype simple, but it is a serious trust
-  boundary. This should stay local or be replaced by a narrower worker launcher.
-- Worker lifecycle is routed through a `WorkerLauncher` abstraction. The only
-  implemented launcher is `local_docker`, which preserves the current local
-  Docker behavior.
-- The frontend is dependency-free HTML/CSS/JS to keep the backend architecture
-  easy to inspect. It is a demo console, not a full product UI.
-- Worker reattachment after orchestrator restart is documented as a future
-  improvement. Current in-memory session state is paired with persisted history.
-- API token auth is deliberately simple. Local users, organizations, and
-  ownership checks exist for SaaS shape, but there are no OAuth flows, roles, or
-  production account-management features yet.
-
-## Security Model
-
-Default mode is trusted local development:
-
-- The orchestrator and frontend are intended to run on localhost.
-- Worker ports are bound to `127.0.0.1`.
-- `.env`, databases, logs, caches, and local artifacts are ignored by git.
-- `/healthz`, `/readyz`, and `/docs` remain public for local diagnostics.
-- Session-scoped data is owned by a local development user and organization.
-- If `ORCHESTRATOR_API_TOKEN` is set, session-scoped endpoints require:
-
-```http
-Authorization: Bearer your_token
-```
-
-Protected endpoints include session create/get/delete, messages, history, UI,
-and SSE streams. The static frontend does not inject tokens; keep the token
-unset for the simplest browser demo or use an API client for protected mode.
-
-### Local Development Identity
-
-The API includes a small local auth adapter so the prototype is multi-user in
-shape without adding a production auth provider yet. Session-scoped endpoints
-resolve identity from request headers:
-
-```http
-X-User-Id: dev-user
-X-Org-Id: dev-org
-```
-
-If those headers are absent, the API falls back to `DEV_USER_ID` and
-`DEV_ORG_ID`, which default to `dev-user` and `dev-org`. This preserves the
-current browser demo: the static frontend can create sessions, stream SSE, open
-noVNC, and load history without manually setting headers.
-
-Sessions are stored with `user_id` and `organization_id`. Reads, message sends,
-SSE streams, history, UI pages, and deletes require the current local identity
-to match the session owner. Cross-owner access returns `404`.
-
-This is not production authentication. The future SaaS path is to replace this
-adapter with a real authenticated principal from an auth provider or OIDC layer,
-then keep the same ownership checks behind that dependency.
-
-### SaaS Safety Limits
-
-The orchestrator now has lightweight SaaS-style lifecycle controls around the
-existing one-worker-per-session flow. These controls are enforced server-side
-and do not require any frontend changes.
-
-- New sessions are rejected when the current user or organization reaches its
-  active concurrent session limit.
-- New sessions and messages are rejected when `PLATFORM_DISABLE_NEW_SESSIONS`
-  or `GLOBAL_KILL_SWITCH` is enabled.
-- Organizations listed in `ORG_DISABLE_NEW_SESSIONS` cannot create sessions or
-  send new messages.
-- Messages are rejected when the session is busy, expired, deleted, killed,
-  failed, over runtime, or over message quota.
-- Runtime and idle expiration stop the active worker, persist a final event,
-  and keep session history instead of silently deleting it.
-- Event persistence is capped by `MAX_EVENTS_PER_SESSION`; live SSE still flows
-  to the browser, but excess events are not stored in SQLite.
-
-These are quota and safety controls, not billing. A future billing phase should
-add a separate cost ledger and provider usage reconciliation.
-
-### Protected noVNC UI Access
-
-Session creation returns `ui_url` and `novnc_url` values that point at the
-orchestrator-owned `/sessions/{id}/ui` wrapper instead of making the frontend
-depend only on the raw worker noVNC port. In local demo mode this wrapper uses
-the same local development identity fallback as the rest of the API, so the
-browser demo still works without extra setup.
-
-For a more SaaS-shaped access flow, enable:
-
-```bash
-export PROTECT_SESSION_UI=true
-export UI_TOKEN_SECRET="replace-with-a-random-secret"
-```
-
-Then callers should request:
-
-```http
-POST /sessions/{id}/ui-token
-```
-
-The endpoint is bearer-token protected when `ORCHESTRATOR_API_TOKEN` is set and
-always ownership-checked with the local identity adapter. It returns a temporary
-URL such as:
-
-```text
-/sessions/{id}/ui?token=...
-```
-
-The signed token contains `session_id`, `user_id`, `organization_id`, and an
-expiration timestamp. The static frontend requests this token automatically
-before opening the noVNC button, so protected mode does not require a frontend
-rewrite.
-
-Manual protected-mode check:
-
-```bash
-export PROTECT_SESSION_UI=true
-export UI_TOKEN_SECRET="dev-random-secret"
-make run-api
-```
-
-Then run the web frontend, click `Clear local`, create a session, and click
-`Open noVNC`. The API log should show `POST /sessions/{id}/ui-token` followed
-by `GET /sessions/{id}/ui?token=...`. A direct `GET /sessions/{id}/ui` without
-the token should return `403`.
-
-This is not a full noVNC reverse proxy. The worker noVNC port is still bound
-locally and embedded by the checked UI page. A later production hardening phase
-should proxy noVNC traffic through the orchestrator or an authenticated edge
-component so raw worker ports are never directly reachable.
-
-### Worker Launcher Boundary
-
-`WORKER_LAUNCHER=local_docker` is the current and default worker launcher. It
-keeps the existing one-Docker-container-per-session behavior, including local
-port allocation, project labels, CPU/memory/PID limits, readiness checks,
-orphan cleanup, SSE URLs, message URLs, and noVNC metadata.
-
-This launcher is appropriate for local development and prototype demos because
-it uses the local Docker engine directly. A production SaaS should eventually
-move worker creation behind a narrower internal or remote launcher so the
-FastAPI app does not need direct Docker socket access.
-
-Future launcher names are roadmap placeholders only and are not implemented:
-`ecs_fargate`, `fly_machines`, `remote_launcher`, and `kubernetes`.
-
-### Database Modes And Migrations
-
-SQLite remains the default local development database. If `DATABASE_URL` is not
-set, the orchestrator uses `COMPUTER_USE_DB_PATH`, creates the local SQLite
-schema idempotently on startup, and preserves the existing browser demo flow.
-
-PostgreSQL is the production-oriented persistence mode. Set `DATABASE_URL` to a
-`postgresql://` or `postgres://` URL and run Alembic migrations before starting
-the API:
-
-```bash
-export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
-make db-migrate
-make run-api
-```
-
-For a local Postgres instance:
-
-```bash
-make db-up
-export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
-make db-migrate
-```
-
-The initial Alembic migration creates the current SaaS schema: users,
-organizations, memberships, sessions, messages, events, lifecycle fields, JSON
-event payload support, and operational indexes for session ownership, status,
-created time, messages, and events. Migrations are the intended production path;
-the SQLite `init_db` helper remains for simple local development.
-
-### Retention And Artifacts
-
-The orchestrator includes a lightweight retention foundation for SaaS-shaped
-operations. Session deletion is logical first: deleted sessions receive
-`deleted_at`, are hidden from normal ownership checks, and their messages/events
-remain available in the database until retention cleanup is explicitly run.
-
-Screenshot artifacts now have metadata in an `artifacts` table. Screenshot event
-payloads are still persisted inline for frontend compatibility, and when a
-screenshot payload includes base64 image data the orchestrator also writes a
-local file under `ARTIFACT_STORAGE_DIR` and records size, checksum, owner,
-session, event, creation, expiry, and deletion metadata. This is a local storage
-foundation only; a future production phase should move artifact bytes to S3 or
-another object store.
-
-Retention cleanup is safe by default. `CLEANUP_RETENTION_ON_STARTUP=false`
-means startup will not delete local demo data. `GET /admin/retention` returns a
-dry-run report showing how many messages, events, artifacts, and deleted
-sessions would be affected. Code can call `cleanup_retention(dry_run=False)` to
-apply cleanup in a controlled operational path.
-
-Screenshots may contain sensitive data. Keep `SCREENSHOT_RETENTION_DAYS` short
-in shared or production-like environments, and do not expose local artifact
-paths outside trusted operators.
-
-### Observability Baseline
-
-Every HTTP response includes an `X-Request-Id` header. If the client sends
-`X-Request-Id`, the orchestrator echoes it; otherwise it generates a UUID.
-Request logs include the request ID, method, path, status, and duration. Query
-strings are intentionally omitted from request logs so signed UI tokens are not
-written to logs.
-
-Logs use normal text formatting by default. Set `LOG_FORMAT=json` to emit one
-JSON object per line for easier ingestion by a future log collector:
-
-```bash
-export LOG_FORMAT=json
-```
-
-Readiness and lightweight operational visibility are exposed through:
-
-```http
-GET /readyz
-GET /metrics
-GET /admin/sessions
-GET /admin/retention
-```
-
-`/readyz` reports safe configuration and dependency state: database reachability,
-configured worker launcher, worker image name, auth mode, and protected UI mode.
-It does not expose API keys, UI token secrets, or bearer tokens.
-
-`/metrics` returns a small JSON snapshot for local demos and smoke checks:
-active sessions, sessions created, failed sessions, active workers, worker start
-failures, messages, quota events, expiration events, launcher type, protected UI
-state, and global kill switch state.
-
-`/admin/sessions` returns active session and worker summaries without message
-contents or secrets. It is protected by `ORCHESTRATOR_API_TOKEN` when that token
-is configured. Production deployments should replace this with real admin auth
-before exposing it beyond a trusted network.
-
-`/admin/retention` returns a dry-run cleanup report and retention configuration
-visibility without deleting anything.
-
-See [SECURITY.md](SECURITY.md) for the Docker socket risk, noVNC/VNC assumptions,
-and future hardening options.
-
-## Expected Event Examples
-
-The worker emits SSE events that the orchestrator proxies and stores.
-
-ASSISTANT_BLOCK:
-
-```text
-event: assistant_block
-data: {"type":"text","text":"I will open the browser and search for the weather."}
-```
-
-TOOL_USE_START:
-
-```text
-event: tool_use_start
-data: {"id":"toolu_123","name":"computer","input":{"action":"screenshot"}}
-```
-
-TOOL_RESULT:
-
-```text
-event: tool_result
-data: {"tool_use_id":"toolu_123","is_error":false,"output":"Opened Firefox."}
-```
-
-SCREENSHOT:
-
-```text
-event: screenshot
-data: {"tool_use_id":"toolu_123","image_base64":"..."}
-```
-
-DONE:
-
-```text
-event: done
-data: {"ok":true}
-```
+## SaaS Evolution Summary
+
+The repo evolved from a local prototype into a SaaS-shaped architecture in
+incremental phases:
+
+- Identity and tenancy: local dev users, organizations, memberships, and
+  session ownership checks.
+- Session safety: concurrent limits, runtime/idle expiration, message/event
+  caps, kill switches, lifecycle statuses, and worker cleanup.
+- Protected UI: ownership-checked noVNC access and optional signed temporary UI
+  tokens.
+- Worker boundary: `WorkerLauncher` protocol with current local Docker
+  implementation and future remote launcher slots.
+- Observability: request IDs, readiness, metrics, and internal admin visibility.
+- Persistence: SQLite local mode plus PostgreSQL support through Alembic
+  migrations.
+- Retention: soft-deleted sessions, artifact metadata, screenshot file
+  foundation, and dry-run retention cleanup.
+
+See [docs/SAAS_EVOLUTION.md](docs/SAAS_EVOLUTION.md) for the phase-by-phase
+boundary notes.
+
+## Local Dev Vs Production
+
+Local/dev by default:
+
+- SQLite via `COMPUTER_USE_DB_PATH`
+- local dev identity from `X-User-Id` / `X-Org-Id` or `DEV_USER_ID` /
+  `DEV_ORG_ID`
+- Docker socket access from the FastAPI process
+- worker ports bound to localhost
+- no hosted auth provider
+- no object storage
+
+Production-oriented foundations already present:
+
+- tenant ownership checks
+- PostgreSQL-compatible schema and Alembic migrations
+- signed UI access tokens
+- session quotas and kill switches
+- request IDs and operational endpoints
+- retention and artifact metadata
+- launcher abstraction for future remote worker backends
+
+Still needed for real hosted SaaS:
+
+- OIDC/Auth0/Clerk/Cognito or equivalent hosted auth
+- remote/internal worker launcher instead of direct Docker socket access
+- object storage for screenshots/artifacts
+- production deployment, TLS, ingress, and secrets management
+- stronger sandboxing and network egress policy
+- billing/cost ledger and provider usage reconciliation
 
 ## Quick Start
 
-Python 3.11 is the safest local development version because the Docker worker
-image runs Python 3.11. The project also supports newer local Python versions
-where dependencies provide wheels; Python 3.14 works with the current psycopg
-dependency range.
+Python 3.11 is the safest local development version because the worker image
+uses Python 3.11. The local API test environment also works on newer Python
+versions where dependencies provide wheels.
 
 ```bash
 python3 -m venv .venv
@@ -400,216 +154,179 @@ Open:
 http://127.0.0.1:5173
 ```
 
-## Configuration Reference
+## Core Commands
 
-Runtime configuration is centralized in `computer_use_demo/api/config.py`.
+```bash
+make test           # focused project tests
+make build-worker   # build computer-use-demo:local
+make run-api        # FastAPI on 127.0.0.1:9000
+make run-web        # static frontend on 127.0.0.1:5173
+make db-up          # optional local Postgres
+make db-migrate     # Alembic upgrade head
+make db-down        # stop optional local Postgres
+make smoke-local    # health/readiness/frontend smoke check
+make clean-workers  # remove project-labeled worker containers
+```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ANTHROPIC_API_KEY` | empty | Required to run real Claude Computer Use tasks. |
-| `ORCHESTRATOR_API_TOKEN` | empty | Optional bearer token for session-scoped API endpoints. |
-| `DEV_USER_ID` | `dev-user` | Local auth adapter fallback user when `X-User-Id` is absent. |
-| `DEV_ORG_ID` | `dev-org` | Local auth adapter fallback organization when `X-Org-Id` is absent. |
-| `MAX_CONCURRENT_SESSIONS_PER_USER` | `10` | Active in-memory session limit for one local dev/SaaS user. |
-| `MAX_CONCURRENT_SESSIONS_PER_ORG` | `50` | Active in-memory session limit for one organization. |
-| `MAX_SESSION_RUNTIME_SECONDS` | `3600` | Hard runtime cap before a session is expired and its worker is stopped. |
-| `MAX_IDLE_SESSION_SECONDS` | `1800` | Idle cap before a non-busy session is expired and its worker is stopped. |
-| `MAX_MESSAGES_PER_SESSION` | `100` | Maximum user messages accepted for one session. |
-| `MAX_EVENTS_PER_SESSION` | `5000` | Maximum worker events persisted for one session. |
-| `PLATFORM_DISABLE_NEW_SESSIONS` | `false` | Reject new sessions and new messages without stopping existing workers. |
-| `GLOBAL_KILL_SWITCH` | `false` | Reject new sessions and new messages as a platform-wide emergency switch. |
-| `ORG_DISABLE_NEW_SESSIONS` | empty | Comma-separated organization IDs blocked from new sessions/messages. |
-| `PROTECT_SESSION_UI` | `false` | Require signed temporary tokens for `/sessions/{id}/ui` browser access. |
-| `UI_TOKEN_SECRET` | empty | HMAC secret for UI access tokens; falls back to a derivation of `ORCHESTRATOR_API_TOKEN` when available. |
-| `UI_TOKEN_TTL_SECONDS` | `300` | Lifetime for signed UI access tokens. |
-| `DATABASE_URL` | empty | Optional production database URL. Use `postgresql://...` or `postgres://...` for PostgreSQL; empty keeps SQLite mode. |
-| `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
-| `MESSAGE_RETENTION_DAYS` | `30` | Age threshold for pruning old messages when retention cleanup is applied. |
-| `EVENT_RETENTION_DAYS` | `14` | Age threshold for pruning old events when retention cleanup is applied. |
-| `SCREENSHOT_RETENTION_DAYS` | `7` | Expiry window for screenshot artifact metadata and local files. |
-| `WORKER_LOG_RETENTION_DAYS` | `7` | Reserved retention window for future worker log artifacts. |
-| `DELETED_SESSION_RETENTION_DAYS` | `30` | Age threshold before soft-deleted sessions can be physically pruned. |
-| `ARTIFACT_STORAGE_DIR` | `data/artifacts` | Local directory for artifact files such as screenshot images. |
-| `CLEANUP_RETENTION_ON_STARTUP` | `false` | Apply retention cleanup at API startup. Leave false for local demos. |
-| `WORKER_LAUNCHER` | `local_docker` | Worker lifecycle backend. Only `local_docker` is implemented; future values are roadmap placeholders. |
-| `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
-| `WORKER_CONNECT_HOST` | `127.0.0.1` | Host the orchestrator uses to call worker HTTP APIs. |
-| `WORKER_IMAGE` | `computer-use-demo:local` | Docker image used for workers. |
-| `MODEL` | `claude-sonnet-4-5-20250929` | Claude model passed to workers. |
-| `TOOL_VERSION` | `computer_use_20250124` | Anthropic Computer Use tool version. |
-| `MAX_TOKENS` | `4096` | Maximum Claude response tokens. |
-| `ENABLE_STREAMLIT` | `false` | Enables the legacy/debug Streamlit UI inside workers. |
-| `VNC_PASSWORD` | empty | Optional VNC password for worker desktop access. |
-| `LOG_LEVEL` | `INFO` | Python logging level. |
-| `LOG_FORMAT` | `text` | Log output format. Use `json` for single-line structured logs. |
-| `CORS_ALLOWED_ORIGINS` | localhost frontend origins | Comma-separated CORS allowlist. |
-| `CLEANUP_ORPHAN_WORKERS_ON_STARTUP` | `false` | Remove project-labeled workers at startup. |
-| `SESSION_TTL_SECONDS` | `300` | Legacy idle fallback used only when `MAX_IDLE_SESSION_SECONDS` is unset. |
-| `CLEANUP_EVERY_SECONDS` | `30` | Background session cleanup interval. |
-| `WORKER_READY_TIMEOUT_SECONDS` | `25.0` | Worker readiness timeout. |
-| `WORKER_READY_POLL_SECONDS` | `0.5` | Worker readiness polling interval. |
-| `WORKER_STATUS_POLL_SECONDS` | `2.0` | Worker task status polling interval. |
-| `SSE_RETRY_LIMIT` | `3` | Worker SSE reconnect attempts before surfacing an error. |
-| `SSE_RETRY_INITIAL_BACKOFF_SECONDS` | `0.25` | Initial worker SSE reconnect backoff. |
-| `SSE_RETRY_MAX_BACKOFF_SECONDS` | `3.0` | Maximum worker SSE reconnect backoff. |
-| `WORKER_CPU_LIMIT` | `1.0` | `docker run --cpus` value for each worker. |
-| `WORKER_MEMORY_LIMIT` | `2g` | `docker run --memory` value for each worker. |
-| `WORKER_PIDS_LIMIT` | `512` | `docker run --pids-limit` value for each worker. |
+`make db-migrate` uses `PYTHON=.venv/bin/python` by default. To use an already
+activated environment, run `make PYTHON=python db-migrate`.
 
-## API Overview
+## Database Modes
+
+SQLite is the default:
+
+```bash
+unset DATABASE_URL
+export COMPUTER_USE_DB_PATH="./data/orchestrator.db"
+make run-api
+```
+
+PostgreSQL is optional:
+
+```bash
+make db-up
+export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
+make db-migrate
+make run-api
+```
+
+Migrations live in `migrations/versions/`. SQLite `init_db()` remains for simple
+local demo setup; Alembic is the production schema path.
+
+## Worker Launcher Model
+
+`WORKER_LAUNCHER=local_docker` is the only implemented launcher. It preserves
+the current one-container-per-session execution path, including local port
+allocation, labels, readiness checks, CPU/memory/PID limits, SSE URLs, message
+URLs, and noVNC metadata.
+
+Future launcher values are documented roadmap placeholders only:
+`ecs_fargate`, `fly_machines`, `remote_launcher`, and `kubernetes`.
+
+## Security Boundaries
+
+- Session-scoped endpoints enforce ownership via user/org identity.
+- `ORCHESTRATOR_API_TOKEN` optionally protects API endpoints with bearer auth.
+- `/sessions/{id}/ui` is ownership-checked; protected UI mode requires signed
+  temporary tokens.
+- Worker ports are localhost-bound for the local demo.
+- Docker socket access is trusted-local only and should be replaced for hosted
+  SaaS.
+- Secrets, `.env`, DB files, artifacts, logs, and caches are ignored by git.
+
+More detail: [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md).
+
+## Observability And Admin
+
+Useful endpoints:
 
 ```http
-POST   /sessions
-GET    /sessions/{id}
-DELETE /sessions/{id}
-
-POST   /sessions/{id}/messages
-GET    /sessions/{id}/events
-GET    /sessions/{id}/history
-
-GET    /healthz
-GET    /readyz
-GET    /metrics
-GET    /admin/sessions
-GET    /admin/retention
+GET /healthz
+GET /readyz
+GET /metrics
+GET /admin/sessions
+GET /admin/retention
 ```
 
-`/healthz`, `/readyz`, `/metrics`, and `/docs` are public local diagnostics.
-`/admin/sessions` and `/admin/retention` are bearer-token protected when
-`ORCHESTRATOR_API_TOKEN` is configured. Session-scoped endpoints are protected
-when the token is configured and always enforce local development ownership with
-`X-User-Id` / `X-Org-Id` or the `DEV_USER_ID` / `DEV_ORG_ID` fallbacks.
+Every HTTP response includes `X-Request-Id`. `LOG_FORMAT=json` enables
+single-line JSON logs. Admin endpoints are for trusted local/internal debugging
+and must be protected by real admin auth before internet exposure.
 
-## Development Commands
+## Retention And Artifacts
 
-```bash
-make install        # Create .venv and install runtime/dev dependencies
-make test           # Run the default orchestrator/backend test suite
-make test-project   # Run the same focused project tests explicitly
-make test-legacy    # Run legacy upstream Anthropic/Streamlit/tool tests
-make test-all       # Run project tests, then legacy tests
-make smoke-local    # Check API health/readiness and frontend HTML
-make db-up          # Start optional local Postgres via docker compose profile
-make db-migrate     # Run Alembic migrations against DATABASE_URL or local SQLite
-make db-down        # Stop the optional local Postgres service
-make build-worker   # Build the per-session worker image
-make run-api        # Start the FastAPI orchestrator on 127.0.0.1:9000
-make run-web        # Serve the static frontend on 127.0.0.1:5173
-make clean-workers  # Remove Docker workers labeled cambioml=orchestrator
-make clean-local    # Remove local test/lint/cache artifacts
-```
+Session deletion is logical first: deleted sessions receive `deleted_at`, become
+hidden from normal ownership checks, and remain available for retention cleanup.
 
-`make db-migrate` runs `$(PYTHON) -m alembic upgrade head` with
-`PYTHON=.venv/bin/python` by default. To use an already activated environment,
-run `make PYTHON=python db-migrate`.
+Screenshot events remain inline for frontend compatibility. When screenshot
+events include base64 image data, the orchestrator can also write local artifact
+files under `ARTIFACT_STORAGE_DIR` and record metadata in the `artifacts` table.
+This is a local foundation; production should move bytes to object storage.
 
-## Testing
+`GET /admin/retention` returns a dry-run report. Startup cleanup is disabled by
+default with `CLEANUP_RETENTION_ON_STARTUP=false`.
 
-The default test command is intentionally focused on this repository's
-orchestrator/backend behavior:
+## Environment Reference
 
-```bash
-make test
-# equivalent to:
-python3 -B -m pytest -q
-```
+Key variables are listed in [.env.example](.env.example). The main groups are:
 
-Pytest is configured to collect `tests/test_*.py`, which keeps the portfolio CI
-suite centered on the FastAPI orchestrator, SQLite persistence, worker manager,
-SSE formatting, config validation, and security/reliability paths.
-
-The repository also contains legacy upstream Anthropic Computer Use tests:
-
-- `tests/loop_test.py`
-- `tests/streamlit_test.py`
-- `tests/tools/*`
-
-Those tests are useful when working on the vendored Computer Use demo internals,
-but they require optional upstream dependencies such as `anthropic` and
-`streamlit`. They are excluded from default collection so a clean local clone can
-verify the orchestration project without installing the full upstream demo stack.
-Run them explicitly with:
-
-```bash
-make test-legacy
-```
-
-To run both suites in order:
-
-```bash
-make test-all
-```
+- API/provider: `ANTHROPIC_API_KEY`, `MODEL`, `TOOL_VERSION`, `MAX_TOKENS`
+- local auth: `DEV_USER_ID`, `DEV_ORG_ID`, `ORCHESTRATOR_API_TOKEN`
+- persistence: `DATABASE_URL`, `COMPUTER_USE_DB_PATH`
+- worker launcher: `WORKER_LAUNCHER`, `WORKER_IMAGE`, `WORKER_CONNECT_HOST`
+- UI protection: `PROTECT_SESSION_UI`, `UI_TOKEN_SECRET`,
+  `UI_TOKEN_TTL_SECONDS`
+- lifecycle limits: `MAX_CONCURRENT_SESSIONS_PER_USER`,
+  `MAX_CONCURRENT_SESSIONS_PER_ORG`, `MAX_SESSION_RUNTIME_SECONDS`,
+  `MAX_IDLE_SESSION_SECONDS`, `MAX_MESSAGES_PER_SESSION`,
+  `MAX_EVENTS_PER_SESSION`, `GLOBAL_KILL_SWITCH`
+- retention: `MESSAGE_RETENTION_DAYS`, `EVENT_RETENTION_DAYS`,
+  `SCREENSHOT_RETENTION_DAYS`, `WORKER_LOG_RETENTION_DAYS`,
+  `DELETED_SESSION_RETENTION_DAYS`, `ARTIFACT_STORAGE_DIR`,
+  `CLEANUP_RETENTION_ON_STARTUP`
+- observability: `LOG_LEVEL`, `LOG_FORMAT`
 
 ## 5-Minute Demo Script
 
-1. Show the architecture diagram and explain one worker container per session.
-2. Run `make test` to show the focused orchestrator/backend test suite.
-3. Start Docker, then run `make build-worker`.
-4. Start the API with `make run-api` and the frontend with `make run-web`.
+1. Run `make test`.
+2. Run `make build-worker`.
+3. Start the API: `make run-api`.
+4. Start the frontend: `make run-web`.
 5. Open `http://127.0.0.1:5173`.
-6. Create Session A and open noVNC.
-7. Send: `Open Firefox and search for the current weather in Tokyo.`
-8. Point out `assistant_block`, `tool_use_start`, `tool_result`, `screenshot`,
-   and `done` events in the timeline.
-9. Create Session B and send a different task to show isolation.
-10. Refresh the frontend and load `History`.
-11. Delete a session and show worker cleanup logs.
+6. Click `Clear local`, then create a session.
+7. Click `Open noVNC`.
+8. Send a task, for example:
 
-During a local demo, keep an eye on:
+```text
+Open Firefox and search for the current weather in Tokyo.
+```
 
-- `X-Request-Id` in browser/API responses when tracing a specific action.
-- `/readyz` before the demo starts to confirm SQLite and launcher config.
-- `/metrics` after creating and deleting sessions to confirm active session and
-  worker counts move as expected.
-- `/admin/sessions` while a session is active to confirm worker metadata without
-  exposing message contents.
-- API logs for lifecycle events such as startup, worker creation, expiration,
-  quota rejection, session delete, and worker cleanup.
+9. Point out live SSE events: `assistant_block`, `tool_use_start`,
+   `tool_result`, `screenshot`, and `done`.
+10. Refresh and load `History`.
+11. Show `/readyz`, `/metrics`, and `/admin/retention`.
+12. Explain SaaS boundaries: local auth adapter, one worker per session,
+    PostgreSQL-ready persistence, protected UI tokens, retention metadata, and
+    what remains before hosted SaaS.
 
-## Screenshots And GIFs
+Longer guide: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
-Recommended portfolio assets:
+## Testing
 
-- `docs/assets/frontend-session-timeline.png`
-- `docs/assets/novnc-worker-desktop.png`
-- `docs/assets/two-session-demo.gif`
+```bash
+python3 -B -m pytest -q
+node --check web/app.js
+python3 -m py_compile migrations/versions/*.py
+```
 
-Do not include API keys, `.env` contents, real customer data, private challenge
-text, reviewer names, or browser tabs with personal information.
+The default pytest suite does not require a live Postgres server or a real
+Anthropic API call.
 
 ## Known Limitations
 
-- SQLite is used for local/demo persistence.
-- PostgreSQL support is intentionally minimal and uses direct synchronous DB
-  calls; it is not yet pooled or async.
-- Active worker reattachment after orchestrator restart is not fully implemented.
-- Docker socket access is powerful and should stay in trusted local environments.
-- VNC/noVNC is local-first and not intended for public exposure.
-- The frontend is a dependency-free demo console, not a polished SaaS UI.
-- API token auth is intentionally simple and not a user/account system.
-- `/metrics` is a lightweight JSON snapshot, not a Prometheus-compatible scrape
-  endpoint.
-- `/admin/sessions` is for trusted local/internal debugging and does not include
-  roles, audit trails, or production admin authorization.
+- Not a hosted SaaS deployment.
+- No production auth provider or role-based admin authorization yet.
+- Local Docker socket access remains a major trust boundary.
+- Active worker reattachment after orchestrator restart is incomplete.
+- PostgreSQL access is synchronous and minimal; no pooling yet.
+- Artifact bytes are local files, not S3/object storage.
+- `/metrics` is JSON, not Prometheus format.
+- The frontend is a demo console, not a production SaaS UI.
 
-## Future Roadmap
+## Roadmap
 
-- Security hardening around Docker socket access, VNC/noVNC exposure, and local
-  token handling.
-- Reattach or reconcile active workers after orchestrator restart.
-- Add migrations and PostgreSQL option for longer-running deployments.
-- Add a worker-launch sidecar or Docker API proxy to reduce socket exposure.
-- Add richer event timeline with screenshot thumbnails and task duration.
-- Add WebSocket streaming alternative for clients that prefer bidirectional flows.
-- Add Prometheus/OpenTelemetry-compatible metrics and tracing behind a production
-  deployment profile.
-- Add deployment notes for a safer single-host demo environment.
-- Add portfolio screenshots and a short two-session GIF.
-- Add packaging for reproducible demo releases.
+- Hosted auth and role-aware admin APIs.
+- Remote/internal worker launcher.
+- Object storage for screenshots and artifacts.
+- Stronger worker isolation and network egress policy.
+- Cost ledger and billing integration.
+- Deployment profile with TLS, secrets management, and observability backend.
+- Optional Prometheus/OpenTelemetry metrics/tracing.
+- Worker reattachment/reconciliation after orchestrator restart.
 
 ## Additional Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [SaaS Evolution](docs/SAAS_EVOLUTION.md)
+- [Security Model](docs/SECURITY_MODEL.md)
 - [Operations](docs/OPERATIONS.md)
-- [Demo Guide](docs/DEMO.md)
-- [Security Notes](SECURITY.md)
+- [Demo Script](docs/DEMO_SCRIPT.md)

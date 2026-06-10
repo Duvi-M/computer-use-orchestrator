@@ -1,82 +1,75 @@
 # Architecture
 
-This project runs Claude Computer Use sessions as local backend workloads. The
-core design choice is one Dockerized desktop worker per session.
+This project orchestrates Claude Computer Use sessions as backend workloads. The
+primary invariant is one worker container per session.
 
-## System Flow
+## System Diagram
 
 ```mermaid
-sequenceDiagram
-    participant UI as HTML/JS Frontend
-    participant API as FastAPI Orchestrator
-    participant Docker as Docker Engine
-    participant Worker as Session Worker
-    participant Claude as Claude Computer Use
-    participant DB as SQLite
+flowchart LR
+    Browser["Browser frontend<br/>HTML / JS"] -->|"REST"| API["FastAPI orchestrator"]
+    Browser -->|"SSE"| API
+    Browser -->|"noVNC window"| UI["Ownership-checked UI route"]
 
-    UI->>API: POST /sessions
-    API->>Docker: docker run worker
-    API->>Worker: GET /health
-    API->>DB: insert session
-    UI->>API: GET /sessions/{id}/events
-    API->>Worker: proxy SSE /events
-    UI->>API: POST /sessions/{id}/messages
-    API->>Worker: POST /messages
-    Worker->>Claude: sampling loop + tools
-    Worker-->>API: SSE events
-    API->>DB: persist messages/events/status
-    UI->>API: GET /sessions/{id}/history
+    API --> Auth["Local auth adapter<br/>user + organization"]
+    API --> Limits["Limits + lifecycle<br/>runtime, idle, quotas"]
+    API --> DB[("SQLite local<br/>PostgreSQL optional")]
+    API --> Retention["Retention + artifacts"]
+    API --> Launcher["WorkerLauncher"]
+
+    Launcher --> LocalDocker["LocalDockerWorkerLauncher"]
+    LocalDocker --> Docker["Docker Engine"]
+    Docker --> Worker["Docker worker<br/>one per session"]
+
+    Worker --> Claude["Claude Computer Use"]
+    Worker --> Desktop["X11 desktop<br/>VNC / noVNC"]
+    Worker -->|"SSE events"| API
+    Worker -->|"message API"| API
+
+    API --> Admin["/readyz /metrics<br/>/admin/sessions /admin/retention"]
+    Retention --> Artifacts["Local artifact files<br/>future object storage"]
+    UI --> Desktop
 ```
 
-## Components
+## Request Flow
 
-### Frontend
+1. Browser calls `POST /sessions`.
+2. FastAPI resolves local dev identity and checks user/org session limits.
+3. `WorkerLauncher` creates a local Docker worker.
+4. Orchestrator waits for worker readiness and persists the session.
+5. Browser connects to `GET /sessions/{id}/events`.
+6. User sends `POST /sessions/{id}/messages`.
+7. Worker runs Claude Computer Use and emits SSE events.
+8. Orchestrator persists events/messages/status and forwards SSE to the browser.
+9. Browser opens noVNC through `/sessions/{id}/ui`, optionally with a signed UI
+   token.
 
-The frontend in `web/` is a dependency-free demo console. It can create
-sessions, send messages, open noVNC, stream live events, and reload persisted
-history from SQLite.
+## Persistence
 
-### Orchestrator
+SQLite is the default local database. PostgreSQL is selected with
+`DATABASE_URL` and managed with Alembic migrations.
 
-The orchestrator in `computer_use_demo/api/main.py` owns session lifecycle,
-worker creation/deletion, SSE proxying, event persistence, health checks, and
-local security controls.
+Persisted objects:
 
-### Worker Manager
-
-`computer_use_demo/api/worker_manager.py` starts and stops Docker workers. It
-adds project labels, local port bindings, CPU/memory/PID limits, and runtime
-environment variables.
-
-### Worker API
-
-`computer_use_demo/worker_api.py` runs inside each worker container. It accepts
-one task at a time, calls the Claude Computer Use sampling loop, and emits SSE
-events.
-
-### Persistence
-
-SQLite stores:
-
+- users
+- organizations
+- organization memberships
 - sessions
 - messages
 - events
-- status, errors, and completion timestamps
+- artifacts
 
-SQLite is intentionally local and simple. The schema is enough for debugging
-and portfolio demos, not a final multi-user data model.
+## Worker Boundary
 
-## Important Boundaries
+`WorkerLauncher` is the seam between the SaaS API layer and worker execution.
+Only `local_docker` is implemented today. Future launchers can move worker
+creation to an internal service, Fargate, Fly Machines, or another controlled
+runtime without changing the session API shape.
 
-- Workers are isolated by container, not by a remote sandbox service.
-- Docker socket access is trusted-local only.
-- Session state is partly in memory; history is persisted.
-- noVNC is intended for local observation.
-- Optional bearer auth protects session-scoped endpoints, but this is not a
-  multi-user authorization system.
+## Intentional Non-Choices
 
-## Why This Shape
-
-The design keeps the core orchestration problem visible: session lifecycle,
-worker isolation, event streaming, and persistence. It avoids adding Redis,
-Celery, Kubernetes, or a frontend build stack before those tradeoffs are needed.
+- No Redis/Celery queue yet.
+- No Kubernetes yet.
+- No hosted auth provider yet.
+- No S3/object storage yet.
+- No billing or cost ledger yet.
