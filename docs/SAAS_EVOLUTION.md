@@ -23,6 +23,7 @@ Frontend -> FastAPI orchestrator -> WorkerLauncher -> Docker worker
 | 6 | Production database path | PostgreSQL support and Alembic migrations, with SQLite still default. |
 | 7 | Retention foundation | Soft delete, artifact metadata, local screenshot files, dry-run cleanup reports. |
 | 8 | Documentation polish | Clear repository positioning, demo flow, and operational docs. |
+| 9 | Release readiness | Final docs, command, security, git hygiene, and verification pass. |
 
 ## What Is SaaS-Shaped Today
 
@@ -41,6 +42,8 @@ Frontend -> FastAPI orchestrator -> WorkerLauncher -> Docker worker
 - Artifacts are local files, not object storage.
 - Metrics are JSON snapshots, not a full monitoring stack.
 - The frontend is a demo console.
+- The project is release-ready as a production-style prototype, not a hosted
+  SaaS service.
 
 ## Next Production Steps
 

@@ -7,8 +7,10 @@ architecture demos.
 
 ```bash
 make test
+node --check web/app.js
 export ANTHROPIC_API_KEY="your_anthropic_api_key"
 make build-worker
+make db-migrate
 ```
 
 Start services:

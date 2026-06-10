@@ -10,6 +10,19 @@ exercise: tenancy, ownership checks, lifecycle limits, protected UI access,
 worker-launch abstraction, observability, migrations, and retention foundations
 are implemented while preserving a simple local demo.
 
+## Project Status
+
+Current status: production-style SaaS prototype.
+
+- Works locally end to end: browser frontend, FastAPI orchestrator, Docker
+  worker, Claude Computer Use, SSE events, noVNC, and persisted history.
+- SaaS foundations are implemented: auth/tenancy shape, ownership checks,
+  lifecycle limits, protected UI links, launcher boundary, observability,
+  PostgreSQL migrations, retention policy, and artifact metadata.
+- Not yet implemented: hosted auth, remote worker launcher, object storage,
+  deployment hardening, billing, compliance controls, and production admin
+  roles.
+
 ## Why It Exists
 
 Computer-use agents are expensive, stateful, and operationally risky. They need
@@ -170,6 +183,20 @@ make clean-workers  # remove project-labeled worker containers
 
 `make db-migrate` uses `PYTHON=.venv/bin/python` by default. To use an already
 activated environment, run `make PYTHON=python db-migrate`.
+
+## Release/Demo Checklist
+
+```bash
+python3 -B -m pytest -q
+node --check web/app.js
+make build-worker
+make db-migrate
+make run-api
+make run-web
+```
+
+Then open `http://127.0.0.1:5173`, create a session, open noVNC, run the Tokyo
+weather task, and inspect `/readyz`, `/metrics`, and `/admin/retention`.
 
 ## Database Modes
 

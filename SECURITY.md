@@ -25,8 +25,19 @@ Authorization: Bearer <token>
 for session-scoped orchestrator endpoints. When the token is unset, the API is
 open for local development and logs a warning at startup.
 
+Admin/debug endpoints are for trusted local or internal operation. Production
+should put them behind real admin authorization, even when bearer-token
+protection is enabled.
+
 `/healthz`, `/readyz`, and FastAPI docs are public to keep local diagnostics
 simple. Do not expose them on an untrusted network.
+
+## Local Identity And Ownership
+
+The local auth adapter reads `X-User-Id` and `X-Org-Id`, falling back to
+`DEV_USER_ID` and `DEV_ORG_ID`. This is useful for local multi-tenant shape and
+tests, but it is not production authentication. Session-scoped APIs enforce
+ownership through the session's user and organization.
 
 ## Docker Socket Risk
 
@@ -49,6 +60,11 @@ include:
 Worker VNC/noVNC ports are bound to localhost by default. `VNC_PASSWORD` can be
 set to require a password in the worker's VNC server. If unset, VNC remains
 passwordless for the simplest local demo flow.
+
+`PROTECT_SESSION_UI=true` requires signed temporary UI tokens for orchestrator
+UI access. Tokens and token secrets must not be logged. The local worker noVNC
+port remains a local trust boundary until a remote worker launcher or reverse
+proxy boundary is added.
 
 ## Secrets
 
