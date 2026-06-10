@@ -35,11 +35,10 @@ from computer_use_demo.api.db import (
     update_session_activity,
     update_session_status,
 )
-from computer_use_demo.api.worker_manager import (
+from computer_use_demo.api.worker_launcher import (
     WorkerInfo,
-    cleanup_project_workers,
-    start_worker,
-    stop_worker,
+    WorkerReadyError,
+    get_worker_launcher,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,8 +57,6 @@ app.add_middleware(
 SESSION_TTL_SECONDS = settings.session_ttl_seconds
 CLEANUP_EVERY_SECONDS = settings.cleanup_every_seconds
 
-WORKER_READY_TIMEOUT_SECONDS = settings.worker_ready_timeout_seconds
-WORKER_READY_POLL_SECONDS = settings.worker_ready_poll_seconds
 WORKER_STATUS_POLL_SECONDS = settings.worker_status_poll_seconds
 SSE_RETRY_LIMIT = settings.sse_retry_limit
 SSE_RETRY_INITIAL_BACKOFF_SECONDS = settings.sse_retry_initial_backoff_seconds
@@ -89,10 +86,6 @@ MESSAGE_ACCEPTING_STATUSES = {
     STATUS_READY,
     STATUS_COMPLETED,
 }
-
-
-class WorkerReadyError(RuntimeError):
-    pass
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -137,6 +130,25 @@ def _coerce_identity(identity: Any) -> DevIdentity:
     default_identity = get_default_dev_identity()
     ensure_identity(default_identity.user_id, default_identity.organization_id)
     return default_identity
+
+
+def start_worker(*, session_id: str, api_key: str) -> WorkerInfo:
+    return get_worker_launcher().create_worker(session_id=session_id, api_key=api_key)
+
+
+async def _wait_worker_ready(worker: WorkerInfo) -> None:
+    await get_worker_launcher().wait_until_ready(worker)
+
+
+async def _get_worker_status(s: SessionState) -> dict[str, Any]:
+    if not s.worker:
+        return {"busy": False, "status": "missing_worker"}
+    return await get_worker_launcher().get_worker_status(s.worker)
+
+
+def stop_worker(name: str) -> None:
+    worker = WorkerInfo(name=name, host="", vnc=0, novnc=0, streamlit=0, http=0)
+    get_worker_launcher().stop_worker(worker)
 
 
 def require_orchestrator_token(
@@ -554,52 +566,12 @@ def _parse_sse_block(block: str) -> tuple[str | None, dict[str, Any] | None, str
         return event_name, {"raw": raw}, event_id
 
 
-async def _wait_worker_ready(worker: WorkerInfo) -> None:
-    url = f"http://{worker.host}:{worker.http}/health"
-    deadline = time.time() + WORKER_READY_TIMEOUT_SECONDS
-    last_error = "no response yet"
-    logger.info(
-        "worker_readiness_check_start worker=%s host=%s http_port=%s novnc_port=%s timeout_seconds=%s",
-        worker.name,
-        worker.host,
-        worker.http,
-        worker.novnc,
-        WORKER_READY_TIMEOUT_SECONDS,
-    )
-
-    async with httpx.AsyncClient(timeout=2.0) as client:
-        while time.time() < deadline:
-            try:
-                r = await client.get(url)
-                if r.status_code == 200:
-                    logger.info(
-                        "worker_readiness_check_ok worker=%s host=%s http_port=%s",
-                        worker.name,
-                        worker.host,
-                        worker.http,
-                    )
-                    return
-                last_error = f"health returned HTTP {r.status_code}"
-            except Exception as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-            await asyncio.sleep(WORKER_READY_POLL_SECONDS)
-
-    message = (
-        "Worker did not become ready in time "
-        f"name={worker.name} host={worker.host} http={worker.http} "
-        f"novnc={worker.novnc} timeout={WORKER_READY_TIMEOUT_SECONDS}s "
-        f"last_error={last_error}"
-    )
-    logger.error(message)
-    raise WorkerReadyError(message)
-
-
 @app.on_event("startup")
 async def startup() -> None:
     logging.basicConfig(level=get_settings().log_level)
     init_db()
     if get_settings().cleanup_orphan_workers_on_startup:
-        cleaned = cleanup_project_workers()
+        cleaned = get_worker_launcher().cleanup_orphans()
         logger.info("startup_orphan_cleanup containers_removed=%s", cleaned)
     logger.info(
         "app_startup app=computer-use-orchestrator db_path=%s cleanup_orphans=%s auth_enabled=%s cors_origins=%s",
@@ -642,17 +614,6 @@ def _session_busy(s: SessionState) -> bool:
     return bool(s.task and not s.task.done())
 
 
-async def _get_worker_status(s: SessionState) -> dict[str, Any]:
-    if not s.worker:
-        return {"busy": False, "status": "missing_worker"}
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(f"http://{s.worker.host}:{s.worker.http}/status")
-        response.raise_for_status()
-        data = response.json()
-        return data if isinstance(data, dict) else {"busy": False, "status": "unknown"}
-
-
 async def _run_worker_message(session_id: str, s: SessionState, text: str) -> None:
     if not s.worker:
         update_session_status(
@@ -676,7 +637,7 @@ async def _run_worker_message(session_id: str, s: SessionState, text: str) -> No
         )
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                f"http://{s.worker.host}:{s.worker.http}/messages",
+                get_worker_launcher().get_worker_message_url(s.worker),
                 json={"text": text},
             )
             response.raise_for_status()
@@ -1055,10 +1016,8 @@ async def session_ui(
     if not s.worker:
         raise HTTPException(status_code=500, detail="Worker not started for session")
 
-    novnc_url = (
-        f"http://{get_settings().public_host}:{s.worker.novnc}/vnc.html"
-        "?resize=scale&autoconnect=1&view_only=1&reconnect=1&reconnect_delay=2000"
-    )
+    ui_metadata = get_worker_launcher().get_worker_ui_metadata(s.worker)
+    novnc_url = str(ui_metadata["novnc_url"])
 
     return f"""<!doctype html>
 <html>
@@ -1094,7 +1053,7 @@ async def sse_events(
     if not s.worker:
         raise HTTPException(status_code=500, detail="Worker not started")
 
-    worker_url = f"http://{s.worker.host}:{s.worker.http}/events"
+    worker_url = get_worker_launcher().get_worker_events_url(s.worker)
 
     async def stream():
         # si el cliente manda Last-Event-ID, lo forwardeamos al worker

@@ -22,6 +22,7 @@ def test_settings_defaults(monkeypatch):
         "UI_TOKEN_SECRET",
         "UI_TOKEN_TTL_SECONDS",
         "COMPUTER_USE_DB_PATH",
+        "WORKER_LAUNCHER",
         "PUBLIC_HOST",
         "WORKER_CONNECT_HOST",
         "WORKER_IMAGE",
@@ -52,6 +53,7 @@ def test_settings_defaults(monkeypatch):
     assert settings.public_host == "127.0.0.1"
     assert settings.worker_connect_host == "127.0.0.1"
     assert settings.worker_image == "computer-use-demo:local"
+    assert settings.worker_launcher == "local_docker"
     assert settings.max_tokens == 4096
     assert settings.log_level == "INFO"
     assert settings.worker_cpu_limit == 1.0
@@ -84,6 +86,7 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     db_path = tmp_path / "orchestrator.db"
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-secret")
     monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(db_path))
+    monkeypatch.setenv("WORKER_LAUNCHER", "local_docker")
     monkeypatch.setenv("WORKER_IMAGE", "worker:test")
     monkeypatch.setenv("MAX_TOKENS", "1234")
     monkeypatch.setenv("LOG_LEVEL", "debug")
@@ -128,6 +131,7 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     assert settings.ui_token_secret == "ui-secret"
     assert settings.ui_token_ttl_seconds == 60
     assert settings.computer_use_db_path == db_path
+    assert settings.worker_launcher == "local_docker"
     assert settings.worker_image == "worker:test"
     assert settings.max_tokens == 1234
     assert settings.log_level == "DEBUG"

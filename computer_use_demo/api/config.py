@@ -78,6 +78,7 @@ class Settings:
     ui_token_secret: str = field(default="", repr=False)
     ui_token_ttl_seconds: int = 300
     computer_use_db_path: Path = DEFAULT_DB_PATH
+    worker_launcher: str = "local_docker"
     public_host: str = "127.0.0.1"
     worker_connect_host: str = "127.0.0.1"
     worker_image: str = "computer-use-demo:local"
@@ -124,6 +125,7 @@ def get_settings() -> Settings:
         ui_token_secret=_str_env("UI_TOKEN_SECRET"),
         ui_token_ttl_seconds=_int_env("UI_TOKEN_TTL_SECONDS", 300),
         computer_use_db_path=Path(_str_env("COMPUTER_USE_DB_PATH", str(DEFAULT_DB_PATH))).expanduser(),
+        worker_launcher=_required_str_env("WORKER_LAUNCHER", "local_docker"),
         public_host=_str_env("PUBLIC_HOST", "127.0.0.1"),
         worker_connect_host=_str_env("WORKER_CONNECT_HOST", "127.0.0.1"),
         worker_image=_str_env("WORKER_IMAGE", "computer-use-demo:local"),

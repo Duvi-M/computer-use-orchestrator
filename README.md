@@ -89,6 +89,9 @@ HTML/JS frontend
   would be the natural next step for multi-user or long-running deployments.
 - Docker socket access keeps the prototype simple, but it is a serious trust
   boundary. This should stay local or be replaced by a narrower worker launcher.
+- Worker lifecycle is routed through a `WorkerLauncher` abstraction. The only
+  implemented launcher is `local_docker`, which preserves the current local
+  Docker behavior.
 - The frontend is dependency-free HTML/CSS/JS to keep the backend architecture
   easy to inspect. It is a demo console, not a full product UI.
 - Worker reattachment after orchestrator restart is documented as a future
@@ -213,6 +216,21 @@ locally and embedded by the checked UI page. A later production hardening phase
 should proxy noVNC traffic through the orchestrator or an authenticated edge
 component so raw worker ports are never directly reachable.
 
+### Worker Launcher Boundary
+
+`WORKER_LAUNCHER=local_docker` is the current and default worker launcher. It
+keeps the existing one-Docker-container-per-session behavior, including local
+port allocation, project labels, CPU/memory/PID limits, readiness checks,
+orphan cleanup, SSE URLs, message URLs, and noVNC metadata.
+
+This launcher is appropriate for local development and prototype demos because
+it uses the local Docker engine directly. A production SaaS should eventually
+move worker creation behind a narrower internal or remote launcher so the
+FastAPI app does not need direct Docker socket access.
+
+Future launcher names are roadmap placeholders only and are not implemented:
+`ecs_fargate`, `fly_machines`, `remote_launcher`, and `kubernetes`.
+
 See [SECURITY.md](SECURITY.md) for the Docker socket risk, noVNC/VNC assumptions,
 and future hardening options.
 
@@ -303,6 +321,7 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | `UI_TOKEN_SECRET` | empty | HMAC secret for UI access tokens; falls back to a derivation of `ORCHESTRATOR_API_TOKEN` when available. |
 | `UI_TOKEN_TTL_SECONDS` | `300` | Lifetime for signed UI access tokens. |
 | `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
+| `WORKER_LAUNCHER` | `local_docker` | Worker lifecycle backend. Only `local_docker` is implemented; future values are roadmap placeholders. |
 | `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
 | `WORKER_CONNECT_HOST` | `127.0.0.1` | Host the orchestrator uses to call worker HTTP APIs. |
 | `WORKER_IMAGE` | `computer-use-demo:local` | Docker image used for workers. |

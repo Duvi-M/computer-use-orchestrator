@@ -8,6 +8,47 @@ from computer_use_demo.api import main
 from computer_use_demo.api.worker_manager import WorkerInfo
 
 
+class RecordingLauncher:
+    def __init__(self):
+        self.created = []
+        self.ready = []
+        self.stopped = []
+        self.cleanup_calls = 0
+
+    def create_worker(self, *, session_id, api_key):
+        self.created.append((session_id, api_key))
+        return WorkerInfo(
+            name=f"worker-{session_id}",
+            host="127.0.0.1",
+            vnc=5900,
+            novnc=6080,
+            streamlit=8501,
+            http=8080,
+        )
+
+    async def wait_until_ready(self, worker):
+        self.ready.append(worker.name)
+
+    async def get_worker_status(self, _worker):
+        return {"busy": False, "status": "idle"}
+
+    def stop_worker(self, worker):
+        self.stopped.append(worker.name)
+
+    def cleanup_orphans(self):
+        self.cleanup_calls += 1
+        return 3
+
+    def get_worker_events_url(self, worker):
+        return f"http://{worker.host}:{worker.http}/events"
+
+    def get_worker_message_url(self, worker):
+        return f"http://{worker.host}:{worker.http}/messages"
+
+    def get_worker_ui_metadata(self, worker):
+        return {"novnc_url": f"http://127.0.0.1:{worker.novnc}/vnc.html"}
+
+
 @pytest.fixture(autouse=True)
 def clean_sessions(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -48,6 +89,91 @@ async def test_session_creation_uses_isolated_workers(monkeypatch):
     assert first["session_id"] != second["session_id"]
     assert len(main.SESSIONS) == 2
     assert first["novnc_url"] != second["novnc_url"]
+
+
+async def test_create_session_calls_worker_launcher(monkeypatch):
+    launcher = RecordingLauncher()
+    monkeypatch.setattr(main, "get_worker_launcher", lambda: launcher)
+
+    result = await main.create_session()
+
+    assert result["session_id"]
+    assert launcher.created == [(result["session_id"], "test-key")]
+    assert launcher.ready == [f"worker-{result['session_id']}"]
+
+
+async def test_delete_session_calls_worker_launcher_stop(monkeypatch):
+    launcher = RecordingLauncher()
+    monkeypatch.setattr(main, "get_worker_launcher", lambda: launcher)
+    session_id = "session-launcher-delete"
+    main.insert_session(session_id)
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=WorkerInfo(
+            name="worker-launcher-delete",
+            host="127.0.0.1",
+            vnc=5900,
+            novnc=6080,
+            streamlit=8501,
+            http=8080,
+        ),
+    )
+
+    await main.delete_session(session_id)
+
+    assert launcher.stopped == ["worker-launcher-delete"]
+
+
+async def test_expired_session_calls_worker_launcher_stop(monkeypatch):
+    launcher = RecordingLauncher()
+    monkeypatch.setattr(main, "get_worker_launcher", lambda: launcher)
+    monkeypatch.setenv("MAX_SESSION_RUNTIME_SECONDS", "1")
+    session_id = "session-launcher-expire"
+    main.insert_session(session_id)
+    main.update_session_status(session_id, "ready")
+    conn = main.get_conn()
+    conn.execute(
+        "UPDATE sessions SET created_at = created_at - 10 WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+    conn.close()
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=WorkerInfo(
+            name="worker-launcher-expire",
+            host="127.0.0.1",
+            vnc=5900,
+            novnc=6080,
+            streamlit=8501,
+            http=8080,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await main.post_message(session_id, main.UserMessageIn(text="hello"))
+
+    assert exc.value.status_code == 429
+    assert launcher.stopped == ["worker-launcher-expire"]
+
+
+async def test_startup_orphan_cleanup_uses_worker_launcher(monkeypatch):
+    launcher = RecordingLauncher()
+    created_tasks = []
+    monkeypatch.setenv("CLEANUP_ORPHAN_WORKERS_ON_STARTUP", "true")
+    monkeypatch.setattr(main, "get_worker_launcher", lambda: launcher)
+
+    def fake_create_task(coro):
+        created_tasks.append(coro)
+        coro.close()
+        return None
+
+    monkeypatch.setattr(main.asyncio, "create_task", fake_create_task)
+
+    await main.startup()
+
+    assert launcher.cleanup_calls == 1
+    assert len(created_tasks) == 1
 
 
 async def test_one_active_task_per_session(monkeypatch):
