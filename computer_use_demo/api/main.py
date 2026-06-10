@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -167,9 +170,16 @@ class SessionCreateResponse(BaseModel):
     session_id: str
     ui_url: str
     novnc_url: str
+    ui_token_url: str | None = None
     streamlit_url: str | None
     legacy_streamlit_enabled: bool
     worker_http: str
+
+
+class UiTokenResponse(BaseModel):
+    token: str
+    expires_at: float
+    ui_url: str
 
 
 class WorkerResponse(BaseModel):
@@ -234,6 +244,91 @@ def _authorize_session(session_id: str, identity: DevIdentity) -> None:
         or owner.get("organization_id") != identity.organization_id
     ):
         raise HTTPException(status_code=404, detail="Session not found")
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    padding = "=" * (-len(raw) % 4)
+    return base64.urlsafe_b64decode((raw + padding).encode("ascii"))
+
+
+def _ui_token_secret() -> bytes:
+    settings = get_settings()
+    if settings.ui_token_secret:
+        return settings.ui_token_secret.encode("utf-8")
+    if settings.orchestrator_api_token:
+        return hashlib.sha256(
+            f"computer-use-ui-token:{settings.orchestrator_api_token}".encode()
+        ).digest()
+    if settings.protect_session_ui:
+        raise HTTPException(
+            status_code=500,
+            detail="UI_TOKEN_SECRET or ORCHESTRATOR_API_TOKEN is required when PROTECT_SESSION_UI=true",
+        )
+    return hashlib.sha256(b"computer-use-local-dev-ui-token").digest()
+
+
+def _sign_ui_payload(payload: dict[str, Any]) -> str:
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_part = _b64url_encode(payload_bytes)
+    signature = hmac.new(
+        _ui_token_secret(),
+        payload_part.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{payload_part}.{_b64url_encode(signature)}"
+
+
+def _make_ui_token(session_id: str, identity: DevIdentity) -> tuple[str, float]:
+    expires_at = time.time() + get_settings().ui_token_ttl_seconds
+    return (
+        _sign_ui_payload(
+            {
+                "session_id": session_id,
+                "user_id": identity.user_id,
+                "organization_id": identity.organization_id,
+                "exp": expires_at,
+            }
+        ),
+        expires_at,
+    )
+
+
+def _validate_ui_token(session_id: str, token: str) -> DevIdentity:
+    try:
+        payload_part, signature_part = token.split(".", 1)
+        expected_signature = hmac.new(
+            _ui_token_secret(),
+            payload_part.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        actual_signature = _b64url_decode(signature_part)
+        if not hmac.compare_digest(expected_signature, actual_signature):
+            raise ValueError("signature mismatch")
+        payload = json.loads(_b64url_decode(payload_part))
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Invalid UI token") from exc
+
+    if payload.get("session_id") != session_id:
+        raise HTTPException(status_code=403, detail="UI token does not match this session")
+    try:
+        expires_at = float(payload.get("exp"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail="Invalid UI token expiration") from exc
+    if time.time() > expires_at:
+        raise HTTPException(status_code=403, detail="UI token has expired")
+
+    identity = DevIdentity(
+        user_id=str(payload.get("user_id") or ""),
+        organization_id=str(payload.get("organization_id") or ""),
+    )
+    if not identity.user_id or not identity.organization_id:
+        raise HTTPException(status_code=403, detail="Invalid UI token identity")
+    _authorize_session(session_id, identity)
+    return identity
 
 
 def _is_terminal_status(status: str | None) -> bool:
@@ -824,10 +919,12 @@ async def create_session(
         s.worker.streamlit,
         s.worker.http,
     )
+    ui_url = f"http://{settings.public_host}:9000/sessions/{session_id}/ui"
     return {
         "session_id": session_id,
-        "ui_url": f"http://{settings.public_host}:9000/sessions/{session_id}/ui",
-        "novnc_url": f"http://{settings.public_host}:{s.worker.novnc}/vnc.html",
+        "ui_url": ui_url,
+        "novnc_url": ui_url,
+        "ui_token_url": f"http://{settings.public_host}:9000/sessions/{session_id}/ui-token",
         "streamlit_url": None,
         "legacy_streamlit_enabled": False,
         "worker_http": f"http://127.0.0.1:{s.worker.http}",
@@ -913,17 +1010,47 @@ async def session_history(
     return history
 
 
+@app.post(
+    "/sessions/{session_id}/ui-token",
+    response_model=UiTokenResponse,
+    dependencies=[Depends(require_orchestrator_token)],
+)
+async def create_ui_token(
+    session_id: str,
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, Any]:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
+    _get_session(session_id)
+    token, expires_at = _make_ui_token(session_id, current_identity)
+    ui_url = f"http://{get_settings().public_host}:9000/sessions/{session_id}/ui?token={token}"
+    return {
+        "token": token,
+        "expires_at": expires_at,
+        "ui_url": ui_url,
+    }
+
+
 @app.get(
     "/sessions/{session_id}/ui",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_orchestrator_token)],
 )
 async def session_ui(
     session_id: str,
+    token: str | None = None,
+    credentials: HTTPAuthorizationCredentials | None = bearer_dependency,
     current_identity: DevIdentity = identity_dependency,
 ) -> str:
-    current_identity = _coerce_identity(current_identity)
-    _authorize_session(session_id, current_identity)
+    settings = get_settings()
+    if token:
+        _validate_ui_token(session_id, token)
+    else:
+        require_orchestrator_token(credentials)
+        current_identity = _coerce_identity(current_identity)
+        _authorize_session(session_id, current_identity)
+        if settings.protect_session_ui:
+            raise HTTPException(status_code=403, detail="UI token is required")
+
     s = _get_session(session_id)
     if not s.worker:
         raise HTTPException(status_code=500, detail="Worker not started for session")

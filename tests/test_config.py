@@ -18,6 +18,9 @@ def test_settings_defaults(monkeypatch):
         "PLATFORM_DISABLE_NEW_SESSIONS",
         "GLOBAL_KILL_SWITCH",
         "ORG_DISABLE_NEW_SESSIONS",
+        "PROTECT_SESSION_UI",
+        "UI_TOKEN_SECRET",
+        "UI_TOKEN_TTL_SECONDS",
         "COMPUTER_USE_DB_PATH",
         "PUBLIC_HOST",
         "WORKER_CONNECT_HOST",
@@ -65,6 +68,9 @@ def test_settings_defaults(monkeypatch):
     assert settings.platform_disable_new_sessions is False
     assert settings.global_kill_switch is False
     assert settings.org_disable_new_sessions == []
+    assert settings.protect_session_ui is False
+    assert settings.ui_token_secret == ""
+    assert settings.ui_token_ttl_seconds == 300
     assert settings.cleanup_orphan_workers_on_startup is False
     assert settings.sse_retry_limit == 3
     assert settings.cors_allowed_origins == [
@@ -97,6 +103,9 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PLATFORM_DISABLE_NEW_SESSIONS", "true")
     monkeypatch.setenv("GLOBAL_KILL_SWITCH", "true")
     monkeypatch.setenv("ORG_DISABLE_NEW_SESSIONS", "org-a,org-b")
+    monkeypatch.setenv("PROTECT_SESSION_UI", "true")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "ui-secret")
+    monkeypatch.setenv("UI_TOKEN_TTL_SECONDS", "60")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://one.test,http://two.test")
     monkeypatch.setenv("VNC_PASSWORD", "vnc-secret")
 
@@ -115,6 +124,9 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     assert settings.platform_disable_new_sessions is True
     assert settings.global_kill_switch is True
     assert settings.org_disable_new_sessions == ["org-a", "org-b"]
+    assert settings.protect_session_ui is True
+    assert settings.ui_token_secret == "ui-secret"
+    assert settings.ui_token_ttl_seconds == 60
     assert settings.computer_use_db_path == db_path
     assert settings.worker_image == "worker:test"
     assert settings.max_tokens == 1234
@@ -145,11 +157,13 @@ def test_settings_repr_does_not_include_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret-api-key")
     monkeypatch.setenv("ORCHESTRATOR_API_TOKEN", "super-secret-token")
     monkeypatch.setenv("VNC_PASSWORD", "super-secret-vnc")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "super-secret-ui")
 
     settings_repr = repr(get_settings())
     assert "super-secret-api-key" not in settings_repr
     assert "super-secret-token" not in settings_repr
     assert "super-secret-vnc" not in settings_repr
+    assert "super-secret-ui" not in settings_repr
 
 
 def test_settings_rejects_invalid_boolean(monkeypatch):

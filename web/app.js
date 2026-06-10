@@ -127,6 +127,7 @@ function persistSessions() {
   const serializable = [...sessions.values()].map((session) => ({
     id: session.id,
     novncUrl: session.novncUrl,
+    uiTokenUrl: session.uiTokenUrl,
     status: session.status,
   }));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
@@ -157,6 +158,7 @@ function restoreSessions() {
       const session = {
         id: item.id,
         novncUrl: item.novncUrl,
+        uiTokenUrl: item.uiTokenUrl || `${API_BASE}/sessions/${item.id}/ui-token`,
         status: item.status || "restored",
         events: [],
         eventSource: null,
@@ -210,7 +212,7 @@ function setActiveSession(sessionId) {
   historyBtn.disabled = !session;
 
   if (session) {
-    novncLink.href = session.novncUrl;
+    novncLink.href = "#";
     novncLink.classList.remove("disabled");
     ensureSessionExists(session);
   } else {
@@ -295,6 +297,7 @@ async function createSession() {
     const session = {
       id: data.session_id,
       novncUrl: data.novnc_url,
+      uiTokenUrl: data.ui_token_url,
       status: "ready",
       events: [],
       eventSource: null,
@@ -373,6 +376,45 @@ async function loadHistory() {
   renderSessions();
 }
 
+async function openNoVnc(event) {
+  event.preventDefault();
+  const session = sessions.get(activeSessionId);
+  if (!session) return;
+
+  const popup = window.open("about:blank", "_blank");
+  if (popup) popup.opener = null;
+  try {
+    const response = await fetch(session.uiTokenUrl || `${API_BASE}/sessions/${session.id}/ui-token`, {
+      method: "POST",
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (popup) {
+        popup.location.href = data.ui_url || session.novncUrl;
+      } else {
+        window.location.href = data.ui_url || session.novncUrl;
+      }
+      return;
+    }
+
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      if (popup) {
+        popup.location.href = session.novncUrl;
+      } else {
+        window.location.href = session.novncUrl;
+      }
+      return;
+    }
+
+    if (popup) popup.close();
+    const data = await response.json().catch(() => ({}));
+    addEvent(session.id, "error", { message: data.detail || "Failed to create noVNC access token" });
+  } catch (error) {
+    if (popup) popup.close();
+    addEvent(session.id, "error", { message: `Failed to open noVNC: ${error.message}` });
+  }
+}
+
 function clearLocalSessions() {
   for (const session of sessions.values()) {
     if (session.eventSource) {
@@ -388,5 +430,6 @@ function clearLocalSessions() {
 createBtn.onclick = createSession;
 historyBtn.onclick = loadHistory;
 clearSessionsBtn.onclick = clearLocalSessions;
+novncLink.addEventListener("click", openNoVnc);
 form.onsubmit = sendMessage;
 restoreSessions();

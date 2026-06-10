@@ -74,6 +74,9 @@ class Settings:
     platform_disable_new_sessions: bool = False
     global_kill_switch: bool = False
     org_disable_new_sessions: list[str] = field(default_factory=list)
+    protect_session_ui: bool = False
+    ui_token_secret: str = field(default="", repr=False)
+    ui_token_ttl_seconds: int = 300
     computer_use_db_path: Path = DEFAULT_DB_PATH
     public_host: str = "127.0.0.1"
     worker_connect_host: str = "127.0.0.1"
@@ -117,6 +120,9 @@ def get_settings() -> Settings:
         platform_disable_new_sessions=_bool_env("PLATFORM_DISABLE_NEW_SESSIONS", False),
         global_kill_switch=_bool_env("GLOBAL_KILL_SWITCH", False),
         org_disable_new_sessions=_csv_env("ORG_DISABLE_NEW_SESSIONS", ""),
+        protect_session_ui=_bool_env("PROTECT_SESSION_UI", False),
+        ui_token_secret=_str_env("UI_TOKEN_SECRET"),
+        ui_token_ttl_seconds=_int_env("UI_TOKEN_TTL_SECONDS", 300),
         computer_use_db_path=Path(_str_env("COMPUTER_USE_DB_PATH", str(DEFAULT_DB_PATH))).expanduser(),
         public_host=_str_env("PUBLIC_HOST", "127.0.0.1"),
         worker_connect_host=_str_env("WORKER_CONNECT_HOST", "127.0.0.1"),

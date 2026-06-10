@@ -161,6 +161,58 @@ and do not require any frontend changes.
 These are quota and safety controls, not billing. A future billing phase should
 add a separate cost ledger and provider usage reconciliation.
 
+### Protected noVNC UI Access
+
+Session creation returns `ui_url` and `novnc_url` values that point at the
+orchestrator-owned `/sessions/{id}/ui` wrapper instead of making the frontend
+depend only on the raw worker noVNC port. In local demo mode this wrapper uses
+the same local development identity fallback as the rest of the API, so the
+browser demo still works without extra setup.
+
+For a more SaaS-shaped access flow, enable:
+
+```bash
+export PROTECT_SESSION_UI=true
+export UI_TOKEN_SECRET="replace-with-a-random-secret"
+```
+
+Then callers should request:
+
+```http
+POST /sessions/{id}/ui-token
+```
+
+The endpoint is bearer-token protected when `ORCHESTRATOR_API_TOKEN` is set and
+always ownership-checked with the local identity adapter. It returns a temporary
+URL such as:
+
+```text
+/sessions/{id}/ui?token=...
+```
+
+The signed token contains `session_id`, `user_id`, `organization_id`, and an
+expiration timestamp. The static frontend requests this token automatically
+before opening the noVNC button, so protected mode does not require a frontend
+rewrite.
+
+Manual protected-mode check:
+
+```bash
+export PROTECT_SESSION_UI=true
+export UI_TOKEN_SECRET="dev-random-secret"
+make run-api
+```
+
+Then run the web frontend, click `Clear local`, create a session, and click
+`Open noVNC`. The API log should show `POST /sessions/{id}/ui-token` followed
+by `GET /sessions/{id}/ui?token=...`. A direct `GET /sessions/{id}/ui` without
+the token should return `403`.
+
+This is not a full noVNC reverse proxy. The worker noVNC port is still bound
+locally and embedded by the checked UI page. A later production hardening phase
+should proxy noVNC traffic through the orchestrator or an authenticated edge
+component so raw worker ports are never directly reachable.
+
 See [SECURITY.md](SECURITY.md) for the Docker socket risk, noVNC/VNC assumptions,
 and future hardening options.
 
@@ -247,6 +299,9 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | `PLATFORM_DISABLE_NEW_SESSIONS` | `false` | Reject new sessions and new messages without stopping existing workers. |
 | `GLOBAL_KILL_SWITCH` | `false` | Reject new sessions and new messages as a platform-wide emergency switch. |
 | `ORG_DISABLE_NEW_SESSIONS` | empty | Comma-separated organization IDs blocked from new sessions/messages. |
+| `PROTECT_SESSION_UI` | `false` | Require signed temporary tokens for `/sessions/{id}/ui` browser access. |
+| `UI_TOKEN_SECRET` | empty | HMAC secret for UI access tokens; falls back to a derivation of `ORCHESTRATOR_API_TOKEN` when available. |
+| `UI_TOKEN_TTL_SECONDS` | `300` | Lifetime for signed UI access tokens. |
 | `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
 | `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
 | `WORKER_CONNECT_HOST` | `127.0.0.1` | Host the orchestrator uses to call worker HTTP APIs. |

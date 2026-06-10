@@ -299,6 +299,191 @@ async def test_different_user_org_cannot_delete_session(tmp_path, monkeypatch):
     main.SESSIONS.clear()
 
 
+async def test_same_owner_can_request_ui_access_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-owner.db"))
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-ok"
+    main.insert_session(session_id, user_id="user-a", organization_id="org-a")
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.post(
+            f"/sessions/{session_id}/ui-token",
+            headers={"X-User-Id": "user-a", "X-Org-Id": "org-a"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["token"]
+    assert f"/sessions/{session_id}/ui?token=" in data["ui_url"]
+    main.SESSIONS.clear()
+
+
+async def test_different_owner_cannot_request_ui_access_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-denied.db"))
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-denied"
+    main.insert_session(session_id, user_id="user-a", organization_id="org-a")
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.post(
+            f"/sessions/{session_id}/ui-token",
+            headers={"X-User-Id": "user-b", "X-Org-Id": "org-b"},
+        )
+
+    assert response.status_code == 404
+    main.SESSIONS.clear()
+
+
+async def test_expired_ui_token_fails(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-expired.db"))
+    monkeypatch.setenv("PROTECT_SESSION_UI", "true")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-expired"
+    main.insert_session(session_id, user_id="user-a", organization_id="org-a")
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+    token = main._sign_ui_payload(
+        {
+            "session_id": session_id,
+            "user_id": "user-a",
+            "organization_id": "org-a",
+            "exp": 1,
+        }
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get(f"/sessions/{session_id}/ui?token={token}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "UI token has expired"
+    main.SESSIONS.clear()
+
+
+async def test_wrong_session_ui_token_fails(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-wrong-session.db"))
+    monkeypatch.setenv("PROTECT_SESSION_UI", "true")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-target"
+    main.insert_session(session_id, user_id="user-a", organization_id="org-a")
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+    token = main._sign_ui_payload(
+        {
+            "session_id": "other-session",
+            "user_id": "user-a",
+            "organization_id": "org-a",
+            "exp": 9999999999,
+        }
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get(f"/sessions/{session_id}/ui?token={token}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "UI token does not match this session"
+    main.SESSIONS.clear()
+
+
+async def test_protected_ui_with_token_succeeds(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-success.db"))
+    monkeypatch.setenv("PROTECT_SESSION_UI", "true")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-success"
+    main.insert_session(session_id, user_id="user-a", organization_id="org-a")
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+    token, _expires_at = main._make_ui_token(
+        session_id,
+        main.DevIdentity(user_id="user-a", organization_id="org-a"),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get(f"/sessions/{session_id}/ui?token={token}")
+
+    assert response.status_code == 200
+    assert "<iframe" in response.text
+    main.SESSIONS.clear()
+
+
+async def test_local_demo_ui_still_works_without_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-local-demo.db"))
+    monkeypatch.setenv("PROTECT_SESSION_UI", "false")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-local"
+    main.insert_session(session_id)
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get(f"/sessions/{session_id}/ui")
+
+    assert response.status_code == 200
+    assert "<iframe" in response.text
+    main.SESSIONS.clear()
+
+
+async def test_protected_ui_requires_token_without_api_auth(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "ui-token-required.db"))
+    monkeypatch.setenv("PROTECT_SESSION_UI", "true")
+    monkeypatch.setenv("UI_TOKEN_SECRET", "test-ui-secret")
+    main.SESSIONS.clear()
+    main.init_db()
+    session_id = "session-ui-token-required"
+    main.insert_session(session_id)
+    main.SESSIONS[session_id] = main.SessionState(
+        session_id=session_id,
+        worker=_fake_worker(session_id),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get(f"/sessions/{session_id}/ui")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "UI token is required"
+    main.SESSIONS.clear()
+
+
 async def test_user_concurrent_session_limit(tmp_path, monkeypatch):
     monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
     monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "user-limit.db"))
