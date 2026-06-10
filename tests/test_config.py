@@ -20,6 +20,7 @@ CONFIG_ENV_NAMES = (
     "PROTECT_SESSION_UI",
     "UI_TOKEN_SECRET",
     "UI_TOKEN_TTL_SECONDS",
+    "DATABASE_URL",
     "COMPUTER_USE_DB_PATH",
     "WORKER_LAUNCHER",
     "PUBLIC_HOST",
@@ -81,6 +82,8 @@ def test_settings_defaults():
     assert settings.protect_session_ui is False
     assert settings.ui_token_secret == ""
     assert settings.ui_token_ttl_seconds == 300
+    assert settings.database_url == ""
+    assert settings.database_backend == "sqlite"
     assert settings.cleanup_orphan_workers_on_startup is False
     assert settings.sse_retry_limit == 3
     assert settings.cors_allowed_origins == [
@@ -118,6 +121,7 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PROTECT_SESSION_UI", "true")
     monkeypatch.setenv("UI_TOKEN_SECRET", "ui-secret")
     monkeypatch.setenv("UI_TOKEN_TTL_SECONDS", "60")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/orchestrator")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://one.test,http://two.test")
     monkeypatch.setenv("VNC_PASSWORD", "vnc-secret")
 
@@ -139,6 +143,8 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     assert settings.protect_session_ui is True
     assert settings.ui_token_secret == "ui-secret"
     assert settings.ui_token_ttl_seconds == 60
+    assert settings.database_url == "postgresql://user:pass@localhost:5432/orchestrator"
+    assert settings.database_backend == "postgresql"
     assert settings.computer_use_db_path == db_path
     assert settings.worker_launcher == "local_docker"
     assert settings.worker_image == "worker:test"
@@ -165,6 +171,28 @@ def test_settings_rejects_non_positive_max_tokens(monkeypatch):
 
     with pytest.raises(ConfigError, match="MAX_TOKENS must be >= 1"):
         get_settings()
+
+
+def test_database_url_unset_uses_sqlite(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert get_settings().database_backend == "sqlite"
+
+
+def test_database_url_postgres_uses_postgresql(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/app")
+
+    settings = get_settings()
+
+    assert settings.database_url == "postgres://user:pass@localhost:5432/app"
+    assert settings.database_backend == "postgresql"
+
+
+def test_database_url_rejects_unsupported_scheme(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "mysql://user:pass@localhost/app")
+
+    with pytest.raises(ConfigError, match="DATABASE_URL must use"):
+        _ = get_settings().database_backend
 
 
 def test_settings_repr_does_not_include_api_key(monkeypatch):

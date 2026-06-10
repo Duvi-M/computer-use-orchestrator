@@ -232,6 +232,36 @@ FastAPI app does not need direct Docker socket access.
 Future launcher names are roadmap placeholders only and are not implemented:
 `ecs_fargate`, `fly_machines`, `remote_launcher`, and `kubernetes`.
 
+### Database Modes And Migrations
+
+SQLite remains the default local development database. If `DATABASE_URL` is not
+set, the orchestrator uses `COMPUTER_USE_DB_PATH`, creates the local SQLite
+schema idempotently on startup, and preserves the existing browser demo flow.
+
+PostgreSQL is the production-oriented persistence mode. Set `DATABASE_URL` to a
+`postgresql://` or `postgres://` URL and run Alembic migrations before starting
+the API:
+
+```bash
+export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
+make db-migrate
+make run-api
+```
+
+For a local Postgres instance:
+
+```bash
+make db-up
+export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
+make db-migrate
+```
+
+The initial Alembic migration creates the current SaaS schema: users,
+organizations, memberships, sessions, messages, events, lifecycle fields, JSON
+event payload support, and operational indexes for session ownership, status,
+created time, messages, and events. Migrations are the intended production path;
+the SQLite `init_db` helper remains for simple local development.
+
 ### Observability Baseline
 
 Every HTTP response includes an `X-Request-Id` header. If the client sends
@@ -313,6 +343,11 @@ data: {"ok":true}
 
 ## Quick Start
 
+Python 3.11 is the safest local development version because the Docker worker
+image runs Python 3.11. The project also supports newer local Python versions
+where dependencies provide wheels; Python 3.14 works with the current psycopg
+dependency range.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -358,6 +393,7 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | `PROTECT_SESSION_UI` | `false` | Require signed temporary tokens for `/sessions/{id}/ui` browser access. |
 | `UI_TOKEN_SECRET` | empty | HMAC secret for UI access tokens; falls back to a derivation of `ORCHESTRATOR_API_TOKEN` when available. |
 | `UI_TOKEN_TTL_SECONDS` | `300` | Lifetime for signed UI access tokens. |
+| `DATABASE_URL` | empty | Optional production database URL. Use `postgresql://...` or `postgres://...` for PostgreSQL; empty keeps SQLite mode. |
 | `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
 | `WORKER_LAUNCHER` | `local_docker` | Worker lifecycle backend. Only `local_docker` is implemented; future values are roadmap placeholders. |
 | `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
@@ -416,12 +452,19 @@ make test-project   # Run the same focused project tests explicitly
 make test-legacy    # Run legacy upstream Anthropic/Streamlit/tool tests
 make test-all       # Run project tests, then legacy tests
 make smoke-local    # Check API health/readiness and frontend HTML
+make db-up          # Start optional local Postgres via docker compose profile
+make db-migrate     # Run Alembic migrations against DATABASE_URL or local SQLite
+make db-down        # Stop the optional local Postgres service
 make build-worker   # Build the per-session worker image
 make run-api        # Start the FastAPI orchestrator on 127.0.0.1:9000
 make run-web        # Serve the static frontend on 127.0.0.1:5173
 make clean-workers  # Remove Docker workers labeled cambioml=orchestrator
 make clean-local    # Remove local test/lint/cache artifacts
 ```
+
+`make db-migrate` runs `$(PYTHON) -m alembic upgrade head` with
+`PYTHON=.venv/bin/python` by default. To use an already activated environment,
+run `make PYTHON=python db-migrate`.
 
 ## Testing
 
@@ -500,6 +543,8 @@ text, reviewer names, or browser tabs with personal information.
 ## Known Limitations
 
 - SQLite is used for local/demo persistence.
+- PostgreSQL support is intentionally minimal and uses direct synchronous DB
+  calls; it is not yet pooled or async.
 - Active worker reattachment after orchestrator restart is not fully implemented.
 - Docker socket access is powerful and should stay in trusted local environments.
 - VNC/noVNC is local-first and not intended for public exposure.

@@ -26,6 +26,7 @@ from computer_use_demo.api.db import (
     count_session_messages,
     ensure_identity,
     get_conn,
+    get_database_backend,
     get_session_history,
     get_session_owner,
     get_session_record,
@@ -281,6 +282,7 @@ class ReadyResponse(BaseModel):
     ok: bool
     status: str
     db_path: str
+    database_backend: str
     database_reachable: bool
     worker_launcher: str
     worker_image: str
@@ -607,7 +609,11 @@ def _db_count(sql: str, params: tuple[Any, ...] = ()) -> int:
     conn = get_conn()
     try:
         row = conn.execute(sql, params).fetchone()
-        return int(row[0]) if row is not None else 0
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(next(iter(row.values())))
+        return int(row[0])
     finally:
         conn.close()
 
@@ -768,6 +774,7 @@ async def readyz() -> dict[str, Any]:
         "ok": True,
         "status": "ready",
         "db_path": str(settings.computer_use_db_path),
+        "database_backend": get_database_backend(),
         "database_reachable": True,
         "worker_launcher": settings.worker_launcher,
         "worker_image": settings.worker_image,

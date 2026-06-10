@@ -1,7 +1,8 @@
-.PHONY: install test test-project test-legacy test-all smoke-local build-worker run-api run-web clean-workers clean-local
+.PHONY: install test test-project test-legacy test-all smoke-local db-up db-migrate db-down build-worker run-api run-web clean-workers clean-local
 
-PROJECT_TESTS := tests/test_api_app.py tests/test_config.py tests/test_db.py tests/test_orchestrator_sessions.py tests/test_worker_api.py tests/test_worker_manager.py
+PROJECT_TESTS := tests/test_api_app.py tests/test_config.py tests/test_db.py tests/test_migrations.py tests/test_orchestrator_sessions.py tests/test_worker_api.py tests/test_worker_manager.py tests/test_worker_launcher.py
 LEGACY_TESTS := tests/loop_test.py tests/streamlit_test.py tests/tools
+PYTHON ?= .venv/bin/python
 
 install:
 	python3 -m venv .venv
@@ -24,6 +25,15 @@ test-all:
 
 smoke-local:
 	.venv/bin/python -B scripts/smoke_local.py
+
+db-up:
+	docker compose --profile postgres up -d postgres
+
+db-migrate:
+	$(PYTHON) -m alembic upgrade head
+
+db-down:
+	docker compose --profile postgres stop postgres
 
 build-worker:
 	docker build -t $${WORKER_IMAGE:-computer-use-demo:local} .

@@ -105,6 +105,7 @@ async def test_readyz(tmp_path, monkeypatch):
     data = response.json()
     assert data["ok"] is True
     assert data["status"] == "ready"
+    assert data["database_backend"] == "sqlite"
     assert data["database_reachable"] is True
     assert data["worker_launcher"] == "local_docker"
     assert data["worker_image"] == "computer-use-demo:local"

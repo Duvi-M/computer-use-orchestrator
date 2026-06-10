@@ -5,6 +5,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def isolate_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def mock_screen_dimensions():
     with mock.patch.dict(
         os.environ, {"HEIGHT": "768", "WIDTH": "1024", "DISPLAY_NUM": "1"}

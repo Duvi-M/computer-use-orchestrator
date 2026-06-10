@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_DB_PATH = Path("data") / "orchestrator.db"
 
@@ -77,6 +78,7 @@ class Settings:
     protect_session_ui: bool = False
     ui_token_secret: str = field(default="", repr=False)
     ui_token_ttl_seconds: int = 300
+    database_url: str = field(default="", repr=False)
     computer_use_db_path: Path = DEFAULT_DB_PATH
     worker_launcher: str = "local_docker"
     public_host: str = "127.0.0.1"
@@ -103,6 +105,19 @@ class Settings:
     cors_allowed_origins: list[str] = field(default_factory=list)
     vnc_password: str = field(default="", repr=False)
 
+    @property
+    def database_backend(self) -> str:
+        if not self.database_url:
+            return "sqlite"
+        parsed = urlparse(self.database_url)
+        if parsed.scheme in {"postgres", "postgresql"}:
+            return "postgresql"
+        if parsed.scheme == "sqlite":
+            return "sqlite"
+        raise ConfigError(
+            "DATABASE_URL must use postgresql://, postgres://, or sqlite:// when set"
+        )
+
 
 def get_settings() -> Settings:
     return Settings(
@@ -125,6 +140,7 @@ def get_settings() -> Settings:
         protect_session_ui=_bool_env("PROTECT_SESSION_UI", False),
         ui_token_secret=_str_env("UI_TOKEN_SECRET"),
         ui_token_ttl_seconds=_int_env("UI_TOKEN_TTL_SECONDS", 300),
+        database_url=_str_env("DATABASE_URL"),
         computer_use_db_path=Path(_str_env("COMPUTER_USE_DB_PATH", str(DEFAULT_DB_PATH))).expanduser(),
         worker_launcher=_required_str_env("WORKER_LAUNCHER", "local_docker"),
         public_host=_str_env("PUBLIC_HOST", "127.0.0.1"),

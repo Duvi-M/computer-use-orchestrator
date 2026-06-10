@@ -9,11 +9,54 @@ from typing import Any
 from computer_use_demo.api.config import get_settings
 
 
+class PostgresConnection:
+    def __init__(self, conn: Any):
+        self._conn = conn
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()):
+        return self._conn.execute(_postgres_sql(sql), _adapt_postgres_params(params))
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def get_db_path() -> Path:
     return get_settings().computer_use_db_path
 
 
-def get_conn() -> sqlite3.Connection:
+def get_database_backend() -> str:
+    return get_settings().database_backend
+
+
+def _postgres_sql(sql: str) -> str:
+    return sql.replace("?", "%s")
+
+
+def _adapt_postgres_params(params: tuple[Any, ...]) -> tuple[Any, ...]:
+    adapted = []
+    for value in params:
+        if isinstance(value, bool):
+            adapted.append(value)
+        else:
+            adapted.append(value)
+    return tuple(adapted)
+
+
+def get_conn() -> Any:
+    settings = get_settings()
+    if settings.database_backend == "postgresql":
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "PostgreSQL support requires psycopg. Run `pip install -r requirements.txt`."
+            ) from exc
+        return PostgresConnection(psycopg.connect(settings.database_url, row_factory=dict_row))
+
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -22,6 +65,10 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    if get_database_backend() == "postgresql":
+        _init_postgres_identity()
+        return
+
     conn = get_conn()
     cur = conn.cursor()
 
@@ -91,6 +138,25 @@ def init_db() -> None:
     conn.close()
 
 
+def _init_postgres_identity() -> None:
+    settings = get_settings()
+    try:
+        conn = get_conn()
+    except Exception as exc:
+        raise RuntimeError(
+            "PostgreSQL database is not reachable; verify DATABASE_URL and run "
+            "`alembic upgrade head` before starting the API."
+        ) from exc
+    try:
+        ensure_identity(settings.dev_user_id, settings.dev_org_id, conn=conn)
+    except Exception as exc:
+        raise RuntimeError(
+            "PostgreSQL schema is not initialized; run `alembic upgrade head`."
+        ) from exc
+    finally:
+        conn.close()
+
+
 def _ensure_session_columns(conn: sqlite3.Connection) -> None:
     existing = {
         row["name"]
@@ -140,22 +206,49 @@ def ensure_identity(
     if conn is None:
         conn = get_conn()
     now = time.time()
-    conn.execute(
-        "INSERT OR IGNORE INTO users (id, created_at) VALUES (?, ?)",
-        (user_id, now),
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO organizations (id, created_at) VALUES (?, ?)",
-        (organization_id, now),
-    )
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO organization_memberships
-            (user_id, organization_id, role, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (user_id, organization_id, "member", now),
-    )
+    if get_database_backend() == "postgresql":
+        conn.execute(
+            """
+            INSERT INTO users (id, created_at)
+            VALUES (?, ?)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (user_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO organizations (id, created_at)
+            VALUES (?, ?)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (organization_id, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO organization_memberships
+                (user_id, organization_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id, organization_id) DO NOTHING
+            """,
+            (user_id, organization_id, "member", now),
+        )
+    else:
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, created_at) VALUES (?, ?)",
+            (user_id, now),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO organizations (id, created_at) VALUES (?, ?)",
+            (organization_id, now),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO organization_memberships
+                (user_id, organization_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, organization_id, "member", now),
+        )
     conn.commit()
     if owns_conn:
         conn.close()
@@ -322,10 +415,11 @@ def get_session_history(session_id: str) -> dict[str, Any] | None:
         (session_id,),
     ):
         item = dict(row)
-        try:
-            item["data"] = json.loads(item["data"])
-        except (TypeError, json.JSONDecodeError):
-            item["data"] = {"raw": item["data"]}
+        if isinstance(item["data"], str):
+            try:
+                item["data"] = json.loads(item["data"])
+            except (TypeError, json.JSONDecodeError):
+                item["data"] = {"raw": item["data"]}
         events.append(item)
 
     conn.close()
@@ -338,9 +432,18 @@ def get_session_history(session_id: str) -> dict[str, Any] | None:
 
 def insert_event(session_id: str, event: str, data: dict[str, Any]) -> None:
     conn = get_conn()
+    payload: Any = json.dumps(data)
+    if get_database_backend() == "postgresql":
+        try:
+            from psycopg.types.json import Jsonb
+        except ImportError as exc:
+            raise RuntimeError(
+                "PostgreSQL support requires psycopg. Run `pip install -r requirements.txt`."
+            ) from exc
+        payload = Jsonb(data)
     conn.execute(
         "INSERT INTO events (session_id, event, data, ts) VALUES (?, ?, ?, ?)",
-        (session_id, event, json.dumps(data), time.time()),
+        (session_id, event, payload, time.time()),
     )
     conn.commit()
     conn.close()
