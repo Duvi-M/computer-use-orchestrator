@@ -19,11 +19,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r dev-requirements.txt
+          python -m pip install -r computer_use_demo/requirements.txt
+          python -m pip install -r dev-requirements.txt
 
       - name: Lint
         run: ruff check computer_use_demo tests scripts
 
       - name: Test
         run: python -B -m pytest -q
+
+      - name: Compile migrations
+        run: python -m py_compile migrations/versions/*.py

@@ -4,8 +4,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from anthropic.types.beta import BetaMessageParam, BetaTextBlockParam
 from fastapi import FastAPI, HTTPException, Request

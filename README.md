@@ -320,6 +320,7 @@ Longer guide: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 ## Testing
 
 ```bash
+ruff check computer_use_demo tests scripts
 python3 -B -m pytest -q
 node --check web/app.js
 python3 -m py_compile migrations/versions/*.py

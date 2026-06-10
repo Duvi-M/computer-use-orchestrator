@@ -1,6 +1,6 @@
+import base64
 import sqlite3
 import time
-import base64
 
 from computer_use_demo.api import db
 

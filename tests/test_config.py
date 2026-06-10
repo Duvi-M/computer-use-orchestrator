@@ -2,7 +2,6 @@ import pytest
 
 from computer_use_demo.api.config import ConfigError, get_settings
 
-
 CONFIG_ENV_NAMES = (
     "ANTHROPIC_API_KEY",
     "ORCHESTRATOR_API_TOKEN",
