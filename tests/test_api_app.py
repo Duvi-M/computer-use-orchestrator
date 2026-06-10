@@ -24,6 +24,13 @@ def isolate_api_config_env(monkeypatch):
         "MAX_IDLE_SESSION_SECONDS",
         "MAX_MESSAGES_PER_SESSION",
         "MAX_EVENTS_PER_SESSION",
+        "MESSAGE_RETENTION_DAYS",
+        "EVENT_RETENTION_DAYS",
+        "SCREENSHOT_RETENTION_DAYS",
+        "WORKER_LOG_RETENTION_DAYS",
+        "DELETED_SESSION_RETENTION_DAYS",
+        "ARTIFACT_STORAGE_DIR",
+        "CLEANUP_RETENTION_ON_STARTUP",
         "WORKER_LAUNCHER",
         "LOG_FORMAT",
     ):
@@ -214,6 +221,25 @@ async def test_admin_sessions_omits_message_contents(tmp_path, monkeypatch):
     assert response.json()["active_sessions"] == 1
     assert "secret message text" not in response.text
     main.SESSIONS.clear()
+
+
+async def test_admin_retention_returns_dry_run_report(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_API_TOKEN", raising=False)
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(tmp_path / "admin-retention.db"))
+    monkeypatch.setenv("ARTIFACT_STORAGE_DIR", str(tmp_path / "artifacts"))
+    main.SESSIONS.clear()
+    main.init_db()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://orchestrator") as client:
+        response = await client.get("/admin/retention")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dry_run"] is True
+    assert data["cleanup_on_startup_enabled"] is False
+    assert data["artifact_storage_dir"] == str(tmp_path / "artifacts")
+    assert {"messages", "events", "artifacts", "deleted_sessions"}.issubset(data)
 
 
 async def test_request_logs_do_not_include_raw_ui_token(tmp_path, monkeypatch, caplog):

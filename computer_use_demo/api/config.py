@@ -80,6 +80,13 @@ class Settings:
     ui_token_ttl_seconds: int = 300
     database_url: str = field(default="", repr=False)
     computer_use_db_path: Path = DEFAULT_DB_PATH
+    message_retention_days: int = 30
+    event_retention_days: int = 14
+    screenshot_retention_days: int = 7
+    worker_log_retention_days: int = 7
+    deleted_session_retention_days: int = 30
+    artifact_storage_dir: Path = Path("data") / "artifacts"
+    cleanup_retention_on_startup: bool = False
     worker_launcher: str = "local_docker"
     public_host: str = "127.0.0.1"
     worker_connect_host: str = "127.0.0.1"
@@ -142,6 +149,13 @@ def get_settings() -> Settings:
         ui_token_ttl_seconds=_int_env("UI_TOKEN_TTL_SECONDS", 300),
         database_url=_str_env("DATABASE_URL"),
         computer_use_db_path=Path(_str_env("COMPUTER_USE_DB_PATH", str(DEFAULT_DB_PATH))).expanduser(),
+        message_retention_days=_int_env("MESSAGE_RETENTION_DAYS", 30, minimum=0),
+        event_retention_days=_int_env("EVENT_RETENTION_DAYS", 14, minimum=0),
+        screenshot_retention_days=_int_env("SCREENSHOT_RETENTION_DAYS", 7, minimum=0),
+        worker_log_retention_days=_int_env("WORKER_LOG_RETENTION_DAYS", 7, minimum=0),
+        deleted_session_retention_days=_int_env("DELETED_SESSION_RETENTION_DAYS", 30, minimum=0),
+        artifact_storage_dir=Path(_str_env("ARTIFACT_STORAGE_DIR", "data/artifacts")).expanduser(),
+        cleanup_retention_on_startup=_bool_env("CLEANUP_RETENTION_ON_STARTUP", False),
         worker_launcher=_required_str_env("WORKER_LAUNCHER", "local_docker"),
         public_host=_str_env("PUBLIC_HOST", "127.0.0.1"),
         worker_connect_host=_str_env("WORKER_CONNECT_HOST", "127.0.0.1"),

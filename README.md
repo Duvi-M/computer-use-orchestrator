@@ -262,6 +262,31 @@ event payload support, and operational indexes for session ownership, status,
 created time, messages, and events. Migrations are the intended production path;
 the SQLite `init_db` helper remains for simple local development.
 
+### Retention And Artifacts
+
+The orchestrator includes a lightweight retention foundation for SaaS-shaped
+operations. Session deletion is logical first: deleted sessions receive
+`deleted_at`, are hidden from normal ownership checks, and their messages/events
+remain available in the database until retention cleanup is explicitly run.
+
+Screenshot artifacts now have metadata in an `artifacts` table. Screenshot event
+payloads are still persisted inline for frontend compatibility, and when a
+screenshot payload includes base64 image data the orchestrator also writes a
+local file under `ARTIFACT_STORAGE_DIR` and records size, checksum, owner,
+session, event, creation, expiry, and deletion metadata. This is a local storage
+foundation only; a future production phase should move artifact bytes to S3 or
+another object store.
+
+Retention cleanup is safe by default. `CLEANUP_RETENTION_ON_STARTUP=false`
+means startup will not delete local demo data. `GET /admin/retention` returns a
+dry-run report showing how many messages, events, artifacts, and deleted
+sessions would be affected. Code can call `cleanup_retention(dry_run=False)` to
+apply cleanup in a controlled operational path.
+
+Screenshots may contain sensitive data. Keep `SCREENSHOT_RETENTION_DAYS` short
+in shared or production-like environments, and do not expose local artifact
+paths outside trusted operators.
+
 ### Observability Baseline
 
 Every HTTP response includes an `X-Request-Id` header. If the client sends
@@ -283,6 +308,7 @@ Readiness and lightweight operational visibility are exposed through:
 GET /readyz
 GET /metrics
 GET /admin/sessions
+GET /admin/retention
 ```
 
 `/readyz` reports safe configuration and dependency state: database reachability,
@@ -298,6 +324,9 @@ state, and global kill switch state.
 contents or secrets. It is protected by `ORCHESTRATOR_API_TOKEN` when that token
 is configured. Production deployments should replace this with real admin auth
 before exposing it beyond a trusted network.
+
+`/admin/retention` returns a dry-run cleanup report and retention configuration
+visibility without deleting anything.
 
 See [SECURITY.md](SECURITY.md) for the Docker socket risk, noVNC/VNC assumptions,
 and future hardening options.
@@ -395,6 +424,13 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | `UI_TOKEN_TTL_SECONDS` | `300` | Lifetime for signed UI access tokens. |
 | `DATABASE_URL` | empty | Optional production database URL. Use `postgresql://...` or `postgres://...` for PostgreSQL; empty keeps SQLite mode. |
 | `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
+| `MESSAGE_RETENTION_DAYS` | `30` | Age threshold for pruning old messages when retention cleanup is applied. |
+| `EVENT_RETENTION_DAYS` | `14` | Age threshold for pruning old events when retention cleanup is applied. |
+| `SCREENSHOT_RETENTION_DAYS` | `7` | Expiry window for screenshot artifact metadata and local files. |
+| `WORKER_LOG_RETENTION_DAYS` | `7` | Reserved retention window for future worker log artifacts. |
+| `DELETED_SESSION_RETENTION_DAYS` | `30` | Age threshold before soft-deleted sessions can be physically pruned. |
+| `ARTIFACT_STORAGE_DIR` | `data/artifacts` | Local directory for artifact files such as screenshot images. |
+| `CLEANUP_RETENTION_ON_STARTUP` | `false` | Apply retention cleanup at API startup. Leave false for local demos. |
 | `WORKER_LAUNCHER` | `local_docker` | Worker lifecycle backend. Only `local_docker` is implemented; future values are roadmap placeholders. |
 | `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
 | `WORKER_CONNECT_HOST` | `127.0.0.1` | Host the orchestrator uses to call worker HTTP APIs. |
@@ -435,13 +471,14 @@ GET    /healthz
 GET    /readyz
 GET    /metrics
 GET    /admin/sessions
+GET    /admin/retention
 ```
 
 `/healthz`, `/readyz`, `/metrics`, and `/docs` are public local diagnostics.
-`/admin/sessions` is bearer-token protected when `ORCHESTRATOR_API_TOKEN` is
-configured. Session-scoped endpoints are protected when the token is configured
-and always enforce local development ownership with `X-User-Id` / `X-Org-Id` or
-the `DEV_USER_ID` / `DEV_ORG_ID` fallbacks.
+`/admin/sessions` and `/admin/retention` are bearer-token protected when
+`ORCHESTRATOR_API_TOKEN` is configured. Session-scoped endpoints are protected
+when the token is configured and always enforce local development ownership with
+`X-User-Id` / `X-Org-Id` or the `DEV_USER_ID` / `DEV_ORG_ID` fallbacks.
 
 ## Development Commands
 

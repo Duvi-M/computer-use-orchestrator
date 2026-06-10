@@ -22,6 +22,13 @@ CONFIG_ENV_NAMES = (
     "UI_TOKEN_TTL_SECONDS",
     "DATABASE_URL",
     "COMPUTER_USE_DB_PATH",
+    "MESSAGE_RETENTION_DAYS",
+    "EVENT_RETENTION_DAYS",
+    "SCREENSHOT_RETENTION_DAYS",
+    "WORKER_LOG_RETENTION_DAYS",
+    "DELETED_SESSION_RETENTION_DAYS",
+    "ARTIFACT_STORAGE_DIR",
+    "CLEANUP_RETENTION_ON_STARTUP",
     "WORKER_LAUNCHER",
     "PUBLIC_HOST",
     "WORKER_CONNECT_HOST",
@@ -84,6 +91,13 @@ def test_settings_defaults():
     assert settings.ui_token_ttl_seconds == 300
     assert settings.database_url == ""
     assert settings.database_backend == "sqlite"
+    assert settings.message_retention_days == 30
+    assert settings.event_retention_days == 14
+    assert settings.screenshot_retention_days == 7
+    assert settings.worker_log_retention_days == 7
+    assert settings.deleted_session_retention_days == 30
+    assert str(settings.artifact_storage_dir) == "data/artifacts"
+    assert settings.cleanup_retention_on_startup is False
     assert settings.cleanup_orphan_workers_on_startup is False
     assert settings.sse_retry_limit == 3
     assert settings.cors_allowed_origins == [
@@ -122,6 +136,13 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     monkeypatch.setenv("UI_TOKEN_SECRET", "ui-secret")
     monkeypatch.setenv("UI_TOKEN_TTL_SECONDS", "60")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/orchestrator")
+    monkeypatch.setenv("MESSAGE_RETENTION_DAYS", "31")
+    monkeypatch.setenv("EVENT_RETENTION_DAYS", "15")
+    monkeypatch.setenv("SCREENSHOT_RETENTION_DAYS", "8")
+    monkeypatch.setenv("WORKER_LOG_RETENTION_DAYS", "9")
+    monkeypatch.setenv("DELETED_SESSION_RETENTION_DAYS", "32")
+    monkeypatch.setenv("ARTIFACT_STORAGE_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CLEANUP_RETENTION_ON_STARTUP", "true")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://one.test,http://two.test")
     monkeypatch.setenv("VNC_PASSWORD", "vnc-secret")
 
@@ -145,6 +166,13 @@ def test_settings_reads_env(monkeypatch, tmp_path):
     assert settings.ui_token_ttl_seconds == 60
     assert settings.database_url == "postgresql://user:pass@localhost:5432/orchestrator"
     assert settings.database_backend == "postgresql"
+    assert settings.message_retention_days == 31
+    assert settings.event_retention_days == 15
+    assert settings.screenshot_retention_days == 8
+    assert settings.worker_log_retention_days == 9
+    assert settings.deleted_session_retention_days == 32
+    assert settings.artifact_storage_dir == tmp_path / "artifacts"
+    assert settings.cleanup_retention_on_startup is True
     assert settings.computer_use_db_path == db_path
     assert settings.worker_launcher == "local_docker"
     assert settings.worker_image == "worker:test"

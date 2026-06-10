@@ -22,8 +22,10 @@ from pydantic import BaseModel
 
 from computer_use_demo.api.config import ConfigError, get_settings
 from computer_use_demo.api.db import (
+    cleanup_retention,
     count_session_events,
     count_session_messages,
+    create_screenshot_artifact,
     ensure_identity,
     get_conn,
     get_database_backend,
@@ -330,6 +332,20 @@ class AdminSessionsResponse(BaseModel):
     sessions: list[AdminSessionSummary]
 
 
+class RetentionReportResponse(BaseModel):
+    dry_run: bool
+    message_cutoff: float
+    event_cutoff: float
+    deleted_session_cutoff: float
+    worker_log_cutoff: float
+    messages: int
+    events: int
+    artifacts: int
+    deleted_sessions: int
+    cleanup_on_startup_enabled: bool
+    artifact_storage_dir: str
+
+
 @dataclass
 class SessionState:
     session_id: str
@@ -539,7 +555,13 @@ def _stop_session_worker(
             "worker": None if not s.worker else s.worker.name,
         },
     )
-    update_session_status(session_id, status, completed=True, stop_reason=stop_reason)
+    update_session_status(
+        session_id,
+        status,
+        completed=True,
+        stop_reason=stop_reason,
+        deleted=status == STATUS_DELETED,
+    )
     if remove_from_memory:
         SESSIONS.pop(session_id, None)
 
@@ -735,6 +757,9 @@ def _parse_sse_block(block: str) -> tuple[str | None, dict[str, Any] | None, str
 async def startup() -> None:
     configure_logging()
     init_db()
+    if get_settings().cleanup_retention_on_startup:
+        report = cleanup_retention(dry_run=False)
+        logger.info("startup_retention_cleanup report=%s", report)
     if get_settings().cleanup_orphan_workers_on_startup:
         cleaned = get_worker_launcher().cleanup_orphans()
         logger.info("startup_orphan_cleanup containers_removed=%s", cleaned)
@@ -821,6 +846,21 @@ async def admin_sessions() -> dict[str, Any]:
     return {
         "active_sessions": len(summaries),
         "sessions": summaries,
+    }
+
+
+@app.get(
+    "/admin/retention",
+    response_model=RetentionReportResponse,
+    dependencies=[Depends(require_orchestrator_token)],
+)
+async def admin_retention() -> dict[str, Any]:
+    settings = get_settings()
+    report = cleanup_retention(dry_run=True)
+    return {
+        **report,
+        "cleanup_on_startup_enabled": settings.cleanup_retention_on_startup,
+        "artifact_storage_dir": str(settings.artifact_storage_dir),
     }
 
 
@@ -965,7 +1005,16 @@ def _persist_worker_event(session_id: str, event_name: str, data: dict[str, Any]
             )
             return
 
-        insert_event(session_id, event_name, data)
+        event_id = insert_event(session_id, event_name, data)
+        if event_name == "screenshot":
+            artifact = create_screenshot_artifact(session_id, event_id, data)
+            logger.info(
+                "screenshot_artifact_recorded session_id=%s event_id=%s artifact_id=%s has_file=%s",
+                session_id,
+                event_id,
+                None if artifact is None else artifact.get("artifact_id"),
+                bool(artifact and artifact.get("storage_path")),
+            )
         logger.info(
             "worker_event_received session_id=%s event=%s data_keys=%s",
             session_id,

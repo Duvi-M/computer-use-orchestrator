@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import base64
+import hashlib
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +109,8 @@ def init_db() -> None:
         status TEXT DEFAULT 'created',
         error TEXT,
         stop_reason TEXT,
-        completed_at REAL
+        completed_at REAL,
+        deleted_at REAL
     )
     """)
 
@@ -130,8 +134,28 @@ def init_db() -> None:
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        session_id TEXT,
+        user_id TEXT,
+        organization_id TEXT,
+        event_id INTEGER,
+        message_id INTEGER,
+        artifact_type TEXT,
+        media_type TEXT,
+        storage_path TEXT,
+        size_bytes INTEGER,
+        checksum TEXT,
+        created_at REAL,
+        expires_at REAL,
+        deleted_at REAL
+    )
+    """)
+
     conn.commit()
     _ensure_session_columns(conn)
+    _ensure_artifact_table(conn)
     settings = get_settings()
     ensure_identity(settings.dev_user_id, settings.dev_org_id, conn=conn)
     _backfill_session_owners(conn, settings.dev_user_id, settings.dev_org_id)
@@ -169,10 +193,38 @@ def _ensure_session_columns(conn: sqlite3.Connection) -> None:
         "error": "TEXT",
         "stop_reason": "TEXT",
         "completed_at": "REAL",
+        "deleted_at": "REAL",
     }
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {definition}")
+    conn.commit()
+
+
+def _ensure_artifact_table(conn: sqlite3.Connection) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(artifacts)")
+    }
+    columns = {
+        "artifact_id": "TEXT PRIMARY KEY",
+        "session_id": "TEXT",
+        "user_id": "TEXT",
+        "organization_id": "TEXT",
+        "event_id": "INTEGER",
+        "message_id": "INTEGER",
+        "artifact_type": "TEXT",
+        "media_type": "TEXT",
+        "storage_path": "TEXT",
+        "size_bytes": "INTEGER",
+        "checksum": "TEXT",
+        "created_at": "REAL",
+        "expires_at": "REAL",
+        "deleted_at": "REAL",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE artifacts ADD COLUMN {name} {definition}")
     conn.commit()
 
 
@@ -283,7 +335,7 @@ def get_session_owner(session_id: str) -> dict[str, Any] | None:
         """
         SELECT id, user_id, organization_id
         FROM sessions
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
         """,
         (session_id,),
     ).fetchone()
@@ -307,6 +359,7 @@ def update_session_status(
     error: str | None = None,
     completed: bool = False,
     stop_reason: str | None = None,
+    deleted: bool = False,
 ) -> None:
     conn = get_conn()
     conn.execute(
@@ -316,10 +369,20 @@ def update_session_status(
             status = ?,
             error = ?,
             stop_reason = COALESCE(?, stop_reason),
-            completed_at = CASE WHEN ? THEN ? ELSE completed_at END
+            completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
+            deleted_at = CASE WHEN ? THEN ? ELSE deleted_at END
         WHERE id = ?
         """,
-        (status, error, stop_reason, completed, time.time(), session_id),
+        (
+            status,
+            error,
+            stop_reason,
+            completed,
+            time.time(),
+            deleted,
+            time.time(),
+            session_id,
+        ),
     )
     conn.commit()
     conn.close()
@@ -366,7 +429,7 @@ def get_session_record(session_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
         SELECT id, user_id, organization_id, created_at, last_activity, status,
-               error, stop_reason, completed_at
+               error, stop_reason, completed_at, deleted_at
         FROM sessions
         WHERE id = ?
         """,
@@ -381,7 +444,7 @@ def get_session_history(session_id: str) -> dict[str, Any] | None:
     session = conn.execute(
         """
         SELECT id, user_id, organization_id, created_at, last_activity, status,
-               error, stop_reason, completed_at
+               error, stop_reason, completed_at, deleted_at
         FROM sessions
         WHERE id = ?
         """,
@@ -430,7 +493,7 @@ def get_session_history(session_id: str) -> dict[str, Any] | None:
     }
 
 
-def insert_event(session_id: str, event: str, data: dict[str, Any]) -> None:
+def insert_event(session_id: str, event: str, data: dict[str, Any]) -> int | None:
     conn = get_conn()
     payload: Any = json.dumps(data)
     if get_database_backend() == "postgresql":
@@ -441,9 +504,297 @@ def insert_event(session_id: str, event: str, data: dict[str, Any]) -> None:
                 "PostgreSQL support requires psycopg. Run `pip install -r requirements.txt`."
             ) from exc
         payload = Jsonb(data)
+        row = conn.execute(
+            """
+            INSERT INTO events (session_id, event, data, ts)
+            VALUES (?, ?, ?, ?)
+            RETURNING id
+            """,
+            (session_id, event, payload, time.time()),
+        ).fetchone()
+        event_id = None if row is None else int(row["id"])
+    else:
+        cursor = conn.execute(
+            "INSERT INTO events (session_id, event, data, ts) VALUES (?, ?, ?, ?)",
+            (session_id, event, payload, time.time()),
+        )
+        event_id = int(cursor.lastrowid)
+    conn.commit()
+    conn.close()
+    return event_id
+
+
+def _retention_expiry(now: float, days: int) -> float:
+    return now + (days * 86400)
+
+
+def create_artifact_metadata(
+    *,
+    session_id: str,
+    artifact_type: str,
+    media_type: str,
+    storage_path: str | None = None,
+    size_bytes: int | None = None,
+    checksum: str | None = None,
+    event_id: int | None = None,
+    message_id: int | None = None,
+    expires_at: float | None = None,
+    artifact_id: str | None = None,
+) -> dict[str, Any]:
+    settings = get_settings()
+    record = get_session_record(session_id)
+    now = time.time()
+    artifact_id = artifact_id or str(uuid.uuid4())
+    user_id = None if record is None else record.get("user_id")
+    organization_id = None if record is None else record.get("organization_id")
+    if expires_at is None:
+        expires_at = _retention_expiry(now, settings.screenshot_retention_days)
+
+    conn = get_conn()
     conn.execute(
-        "INSERT INTO events (session_id, event, data, ts) VALUES (?, ?, ?, ?)",
-        (session_id, event, payload, time.time()),
+        """
+        INSERT INTO artifacts
+            (artifact_id, session_id, user_id, organization_id, event_id, message_id,
+             artifact_type, media_type, storage_path, size_bytes, checksum, created_at,
+             expires_at, deleted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            artifact_id,
+            session_id,
+            user_id,
+            organization_id,
+            event_id,
+            message_id,
+            artifact_type,
+            media_type,
+            storage_path,
+            size_bytes,
+            checksum,
+            now,
+            expires_at,
+            None,
+        ),
     )
     conn.commit()
     conn.close()
+    return {
+        "artifact_id": artifact_id,
+        "session_id": session_id,
+        "user_id": user_id,
+        "organization_id": organization_id,
+        "event_id": event_id,
+        "message_id": message_id,
+        "artifact_type": artifact_type,
+        "media_type": media_type,
+        "storage_path": storage_path,
+        "size_bytes": size_bytes,
+        "checksum": checksum,
+        "created_at": now,
+        "expires_at": expires_at,
+        "deleted_at": None,
+    }
+
+
+def _decode_base64_image(raw: Any) -> bytes | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    if "," in raw and raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        return base64.b64decode(raw, validate=False)
+    except Exception:
+        return None
+
+
+def create_screenshot_artifact(
+    session_id: str,
+    event_id: int | None,
+    data: dict[str, Any],
+) -> dict[str, Any] | None:
+    image = (
+        data.get("image_base64")
+        or data.get("screenshot_base64")
+        or data.get("screenshot")
+    )
+    image_bytes = _decode_base64_image(image)
+    artifact_id = str(uuid.uuid4())
+    storage_path = None
+    size_bytes = None
+    checksum = None
+    if image_bytes:
+        settings = get_settings()
+        artifact_dir = settings.artifact_storage_dir / session_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{artifact_id}.png"
+        artifact_path.write_bytes(image_bytes)
+        storage_path = str(artifact_path)
+        size_bytes = len(image_bytes)
+        checksum = hashlib.sha256(image_bytes).hexdigest()
+
+    return create_artifact_metadata(
+        session_id=session_id,
+        artifact_id=artifact_id,
+        event_id=event_id,
+        artifact_type="screenshot",
+        media_type="image/png",
+        storage_path=storage_path,
+        size_bytes=size_bytes,
+        checksum=checksum,
+    )
+
+
+def list_artifacts(
+    *,
+    session_id: str | None = None,
+    include_deleted: bool = False,
+) -> list[dict[str, Any]]:
+    conn = get_conn()
+    where = []
+    params: list[Any] = []
+    if session_id is not None:
+        where.append("session_id = ?")
+        params.append(session_id)
+    if not include_deleted:
+        where.append("deleted_at IS NULL")
+    where_sql = "" if not where else "WHERE " + " AND ".join(where)
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT artifact_id, session_id, user_id, organization_id, event_id,
+                   message_id, artifact_type, media_type, storage_path, size_bytes,
+                   checksum, created_at, expires_at, deleted_at
+            FROM artifacts
+            {where_sql}
+            ORDER BY created_at ASC
+            """,
+            tuple(params),
+        )
+    ]
+    conn.close()
+    return rows
+
+
+def _count_where(table: str, where_sql: str, params: tuple[Any, ...]) -> int:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS count FROM {table} WHERE {where_sql}",
+            params,
+        ).fetchone()
+        if isinstance(row, dict):
+            return int(row["count"])
+        return int(row["count"])
+    finally:
+        conn.close()
+
+
+def _delete_where(table: str, where_sql: str, params: tuple[Any, ...]) -> int:
+    conn = get_conn()
+    try:
+        count = _count_where(table, where_sql, params)
+        conn.execute(f"DELETE FROM {table} WHERE {where_sql}", params)
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def _soft_delete_expired_artifacts(now: float, dry_run: bool) -> int:
+    where_sql = "expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL"
+    count = _count_where("artifacts", where_sql, (now,))
+    if dry_run or count == 0:
+        return count
+    conn = get_conn()
+    try:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT artifact_id, storage_path FROM artifacts WHERE " + where_sql,
+                (now,),
+            )
+        ]
+        for row in rows:
+            storage_path = row.get("storage_path")
+            if storage_path:
+                Path(storage_path).unlink(missing_ok=True)
+        conn.execute(
+            "UPDATE artifacts SET deleted_at = ? WHERE " + where_sql,
+            (now, now),
+        )
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def cleanup_retention(*, dry_run: bool = True, now: float | None = None) -> dict[str, Any]:
+    settings = get_settings()
+    now = time.time() if now is None else now
+    message_cutoff = now - (settings.message_retention_days * 86400)
+    event_cutoff = now - (settings.event_retention_days * 86400)
+    deleted_session_cutoff = now - (settings.deleted_session_retention_days * 86400)
+    worker_log_cutoff = now - (settings.worker_log_retention_days * 86400)
+
+    report = {
+        "dry_run": dry_run,
+        "message_cutoff": message_cutoff,
+        "event_cutoff": event_cutoff,
+        "deleted_session_cutoff": deleted_session_cutoff,
+        "worker_log_cutoff": worker_log_cutoff,
+        "messages": _count_where("messages", "ts <= ?", (message_cutoff,)),
+        "events": _count_where("events", "ts <= ?", (event_cutoff,)),
+        "artifacts": _count_where(
+            "artifacts",
+            "expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL",
+            (now,),
+        ),
+        "deleted_sessions": _count_where(
+            "sessions",
+            "deleted_at IS NOT NULL AND deleted_at <= ?",
+            (deleted_session_cutoff,),
+        ),
+    }
+    if dry_run:
+        return report
+
+    report["messages"] = _delete_where("messages", "ts <= ?", (message_cutoff,))
+    report["events"] = _delete_where("events", "ts <= ?", (event_cutoff,))
+    report["artifacts"] = _soft_delete_expired_artifacts(now, dry_run=False)
+
+    conn = get_conn()
+    try:
+        deleted_sessions = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id
+                FROM sessions
+                WHERE deleted_at IS NOT NULL AND deleted_at <= ?
+                """,
+                (deleted_session_cutoff,),
+            )
+        ]
+        for row in deleted_sessions:
+            session_id = row["id"]
+            artifact_rows = [
+                dict(artifact)
+                for artifact in conn.execute(
+                    "SELECT storage_path FROM artifacts WHERE session_id = ?",
+                    (session_id,),
+                )
+            ]
+            for artifact in artifact_rows:
+                storage_path = artifact.get("storage_path")
+                if storage_path:
+                    Path(storage_path).unlink(missing_ok=True)
+            conn.execute("DELETE FROM artifacts WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        conn.commit()
+        report["deleted_sessions"] = len(deleted_sessions)
+    finally:
+        conn.close()
+    return report
