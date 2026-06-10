@@ -26,8 +26,34 @@ def init_db() -> None:
     cur = conn.cursor()
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        created_at REAL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS organizations (
+        id TEXT PRIMARY KEY,
+        created_at REAL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS organization_memberships (
+        user_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        role TEXT DEFAULT 'member',
+        created_at REAL,
+        PRIMARY KEY (user_id, organization_id)
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
+        user_id TEXT,
+        organization_id TEXT,
         created_at REAL,
         last_activity REAL,
         status TEXT DEFAULT 'created',
@@ -58,6 +84,9 @@ def init_db() -> None:
 
     conn.commit()
     _ensure_session_columns(conn)
+    settings = get_settings()
+    ensure_identity(settings.dev_user_id, settings.dev_org_id, conn=conn)
+    _backfill_session_owners(conn, settings.dev_user_id, settings.dev_org_id)
     conn.close()
 
 
@@ -67,6 +96,8 @@ def _ensure_session_columns(conn: sqlite3.Connection) -> None:
         for row in conn.execute("PRAGMA table_info(sessions)")
     }
     columns = {
+        "user_id": "TEXT",
+        "organization_id": "TEXT",
         "status": "TEXT DEFAULT 'created'",
         "error": "TEXT",
         "completed_at": "REAL",
@@ -77,18 +108,92 @@ def _ensure_session_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def insert_session(session_id: str) -> None:
-    now = time.time()
-    conn = get_conn()
+def _backfill_session_owners(
+    conn: sqlite3.Connection,
+    default_user_id: str,
+    default_org_id: str,
+) -> None:
+    conn.execute(
+        "UPDATE sessions SET user_id = ? WHERE user_id IS NULL OR user_id = ''",
+        (default_user_id,),
+    )
     conn.execute(
         """
-        INSERT INTO sessions (id, created_at, last_activity, status)
+        UPDATE sessions
+        SET organization_id = ?
+        WHERE organization_id IS NULL OR organization_id = ''
+        """,
+        (default_org_id,),
+    )
+    conn.commit()
+
+
+def ensure_identity(
+    user_id: str,
+    organization_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    owns_conn = conn is None
+    if conn is None:
+        conn = get_conn()
+    now = time.time()
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, created_at) VALUES (?, ?)",
+        (user_id, now),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO organizations (id, created_at) VALUES (?, ?)",
+        (organization_id, now),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO organization_memberships
+            (user_id, organization_id, role, created_at)
         VALUES (?, ?, ?, ?)
         """,
-        (session_id, now, now, "created"),
+        (user_id, organization_id, "member", now),
+    )
+    conn.commit()
+    if owns_conn:
+        conn.close()
+
+
+def insert_session(
+    session_id: str,
+    user_id: str | None = None,
+    organization_id: str | None = None,
+) -> None:
+    now = time.time()
+    settings = get_settings()
+    user_id = user_id or settings.dev_user_id
+    organization_id = organization_id or settings.dev_org_id
+    conn = get_conn()
+    ensure_identity(user_id, organization_id, conn=conn)
+    conn.execute(
+        """
+        INSERT INTO sessions
+            (id, user_id, organization_id, created_at, last_activity, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (session_id, user_id, organization_id, now, now, "created"),
     )
     conn.commit()
     conn.close()
+
+
+def get_session_owner(session_id: str) -> dict[str, Any] | None:
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT id, user_id, organization_id
+        FROM sessions
+        WHERE id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    return None if row is None else dict(row)
 
 
 def update_session_activity(session_id: str) -> None:
@@ -134,7 +239,7 @@ def get_session_history(session_id: str) -> dict[str, Any] | None:
     conn = get_conn()
     session = conn.execute(
         """
-        SELECT id, created_at, last_activity, status, error, completed_at
+        SELECT id, user_id, organization_id, created_at, last_activity, status, error, completed_at
         FROM sessions
         WHERE id = ?
         """,

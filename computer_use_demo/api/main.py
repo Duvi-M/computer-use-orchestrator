@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -18,8 +18,10 @@ from pydantic import BaseModel
 
 from computer_use_demo.api.config import ConfigError, get_settings
 from computer_use_demo.api.db import (
+    ensure_identity,
     get_conn,
     get_session_history,
+    get_session_owner,
     init_db,
     insert_event,
     insert_message,
@@ -64,6 +66,46 @@ class WorkerReadyError(RuntimeError):
 
 bearer_scheme = HTTPBearer(auto_error=False)
 bearer_dependency = Depends(bearer_scheme)
+
+
+@dataclass(frozen=True)
+class DevIdentity:
+    user_id: str
+    organization_id: str
+
+
+def get_default_dev_identity() -> DevIdentity:
+    settings = get_settings()
+    return DevIdentity(
+        user_id=settings.dev_user_id,
+        organization_id=settings.dev_org_id,
+    )
+
+
+def get_current_identity(
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
+) -> DevIdentity:
+    settings = get_settings()
+    identity = DevIdentity(
+        user_id=(x_user_id or settings.dev_user_id).strip(),
+        organization_id=(x_org_id or settings.dev_org_id).strip(),
+    )
+    if not identity.user_id or not identity.organization_id:
+        raise HTTPException(status_code=400, detail="User and organization identity are required")
+    ensure_identity(identity.user_id, identity.organization_id)
+    return identity
+
+
+identity_dependency = Depends(get_current_identity)
+
+
+def _coerce_identity(identity: Any) -> DevIdentity:
+    if isinstance(identity, DevIdentity):
+        return identity
+    default_identity = get_default_dev_identity()
+    ensure_identity(default_identity.user_id, default_identity.organization_id)
+    return default_identity
 
 
 def require_orchestrator_token(
@@ -153,6 +195,17 @@ def _get_session(session_id: str) -> SessionState:
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
     return s
+
+
+def _authorize_session(session_id: str, identity: DevIdentity) -> None:
+    owner = get_session_owner(session_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if (
+        owner.get("user_id") != identity.user_id
+        or owner.get("organization_id") != identity.organization_id
+    ):
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 async def _cleanup_sessions_loop() -> None:
@@ -453,7 +506,10 @@ def _persist_worker_event(session_id: str, event_name: str, data: dict[str, Any]
     response_model=SessionCreateResponse,
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def create_session() -> dict[str, Any]:
+async def create_session(
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, Any]:
+    current_identity = _coerce_identity(current_identity)
     try:
         settings = get_settings()
     except ConfigError as exc:
@@ -465,8 +521,17 @@ async def create_session() -> dict[str, Any]:
 
     session_id = str(uuid.uuid4())
     s = SessionState(session_id=session_id)
-    insert_session(session_id)
-    logger.info("session_create_requested session_id=%s", session_id)
+    insert_session(
+        session_id,
+        user_id=current_identity.user_id,
+        organization_id=current_identity.organization_id,
+    )
+    logger.info(
+        "session_create_requested session_id=%s user_id=%s organization_id=%s",
+        session_id,
+        current_identity.user_id,
+        current_identity.organization_id,
+    )
 
     try:
         s.worker = start_worker(session_id=session_id, api_key=api_key)
@@ -526,7 +591,12 @@ async def create_session() -> dict[str, Any]:
     response_model=OkResponse,
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def delete_session(session_id: str) -> dict[str, bool]:
+async def delete_session(
+    session_id: str,
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, bool]:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     s = _get_session(session_id)
     logger.info(
         "session_delete_requested session_id=%s busy=%s worker=%s",
@@ -554,7 +624,12 @@ async def delete_session(session_id: str) -> dict[str, bool]:
     response_model=SessionResponse,
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def get_session(session_id: str) -> dict[str, Any]:
+async def get_session(
+    session_id: str,
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, Any]:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     s = _get_session(session_id)
     history = get_session_history(session_id)
     return {
@@ -578,7 +653,12 @@ async def get_session(session_id: str) -> dict[str, Any]:
     "/sessions/{session_id}/history",
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def session_history(session_id: str) -> dict[str, Any]:
+async def session_history(
+    session_id: str,
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, Any]:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     _get_session(session_id)
     history = get_session_history(session_id)
     if history is None:
@@ -591,7 +671,12 @@ async def session_history(session_id: str) -> dict[str, Any]:
     response_class=HTMLResponse,
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def session_ui(session_id: str) -> str:
+async def session_ui(
+    session_id: str,
+    current_identity: DevIdentity = identity_dependency,
+) -> str:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     s = _get_session(session_id)
     if not s.worker:
         raise HTTPException(status_code=500, detail="Worker not started for session")
@@ -622,7 +707,13 @@ async def session_ui(session_id: str) -> str:
     "/sessions/{session_id}/events",
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def sse_events(session_id: str, request: Request):
+async def sse_events(
+    session_id: str,
+    request: Request,
+    current_identity: DevIdentity = identity_dependency,
+):
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     s = _get_session(session_id)
     _touch(s)
 
@@ -738,7 +829,13 @@ async def sse_events(session_id: str, request: Request):
     response_model=MessageAcceptedResponse,
     dependencies=[Depends(require_orchestrator_token)],
 )
-async def post_message(session_id: str, body: UserMessageIn) -> dict[str, Any]:
+async def post_message(
+    session_id: str,
+    body: UserMessageIn,
+    current_identity: DevIdentity = identity_dependency,
+) -> dict[str, Any]:
+    current_identity = _coerce_identity(current_identity)
+    _authorize_session(session_id, current_identity)
     s = _get_session(session_id)
     _touch(s)
 

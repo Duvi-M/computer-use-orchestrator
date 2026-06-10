@@ -19,8 +19,21 @@ def test_init_db_uses_configurable_path(tmp_path, monkeypatch):
             )
         }
 
-    assert {"sessions", "messages", "events"}.issubset(tables)
+    assert {
+        "users",
+        "organizations",
+        "organization_memberships",
+        "sessions",
+        "messages",
+        "events",
+    }.issubset(tables)
     assert {"status", "error", "completed_at"}.issubset(
+        {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(sessions)")
+        }
+    )
+    assert {"user_id", "organization_id"}.issubset(
         {
             row[1]
             for row in conn.execute("PRAGMA table_info(sessions)")
@@ -44,6 +57,28 @@ def test_session_history_persists_messages_events_and_status(tmp_path, monkeypat
 
     assert history is not None
     assert history["session"]["status"] == "completed"
+    assert history["session"]["user_id"] == "dev-user"
+    assert history["session"]["organization_id"] == "dev-org"
     assert [message["role"] for message in history["messages"]] == ["user", "assistant"]
     assert history["events"][0]["event"] == "done"
     assert history["events"][0]["data"] == {"ok": True}
+
+
+def test_insert_session_stores_owner(tmp_path, monkeypatch):
+    db_path = tmp_path / "owners.db"
+    monkeypatch.setenv("COMPUTER_USE_DB_PATH", str(db_path))
+
+    db.init_db()
+    db.insert_session("session-owned", user_id="user-a", organization_id="org-a")
+
+    owner = db.get_session_owner("session-owned")
+    history = db.get_session_history("session-owned")
+
+    assert owner == {
+        "id": "session-owned",
+        "user_id": "user-a",
+        "organization_id": "org-a",
+    }
+    assert history is not None
+    assert history["session"]["user_id"] == "user-a"
+    assert history["session"]["organization_id"] == "org-a"

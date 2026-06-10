@@ -63,6 +63,8 @@ def _csv_env(name: str, default: str) -> list[str]:
 class Settings:
     anthropic_api_key: str = field(default="", repr=False)
     orchestrator_api_token: str = field(default="", repr=False)
+    dev_user_id: str = "dev-user"
+    dev_org_id: str = "dev-org"
     computer_use_db_path: Path = DEFAULT_DB_PATH
     public_host: str = "127.0.0.1"
     worker_connect_host: str = "127.0.0.1"
@@ -92,6 +94,8 @@ def get_settings() -> Settings:
     return Settings(
         anthropic_api_key=_str_env("ANTHROPIC_API_KEY"),
         orchestrator_api_token=_str_env("ORCHESTRATOR_API_TOKEN"),
+        dev_user_id=_required_str_env("DEV_USER_ID", "dev-user"),
+        dev_org_id=_required_str_env("DEV_ORG_ID", "dev-org"),
         computer_use_db_path=Path(_str_env("COMPUTER_USE_DB_PATH", str(DEFAULT_DB_PATH))).expanduser(),
         public_host=_str_env("PUBLIC_HOST", "127.0.0.1"),
         worker_connect_host=_str_env("WORKER_CONNECT_HOST", "127.0.0.1"),

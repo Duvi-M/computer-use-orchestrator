@@ -104,6 +104,7 @@ Default mode is trusted local development:
 - Worker ports are bound to `127.0.0.1`.
 - `.env`, databases, logs, caches, and local artifacts are ignored by git.
 - `/healthz`, `/readyz`, and `/docs` remain public for local diagnostics.
+- Session-scoped data is owned by a local development user and organization.
 - If `ORCHESTRATOR_API_TOKEN` is set, session-scoped endpoints require:
 
 ```http
@@ -113,6 +114,30 @@ Authorization: Bearer your_token
 Protected endpoints include session create/get/delete, messages, history, UI,
 and SSE streams. The static frontend does not inject tokens; keep the token
 unset for the simplest browser demo or use an API client for protected mode.
+
+### Local Development Identity
+
+The API includes a small local auth adapter so the prototype is multi-user in
+shape without adding a production auth provider yet. Session-scoped endpoints
+resolve identity from request headers:
+
+```http
+X-User-Id: dev-user
+X-Org-Id: dev-org
+```
+
+If those headers are absent, the API falls back to `DEV_USER_ID` and
+`DEV_ORG_ID`, which default to `dev-user` and `dev-org`. This preserves the
+current browser demo: the static frontend can create sessions, stream SSE, open
+noVNC, and load history without manually setting headers.
+
+Sessions are stored with `user_id` and `organization_id`. Reads, message sends,
+SSE streams, history, UI pages, and deletes require the current local identity
+to match the session owner. Cross-owner access returns `404`.
+
+This is not production authentication. The future SaaS path is to replace this
+adapter with a real authenticated principal from an auth provider or OIDC layer,
+then keep the same ownership checks behind that dependency.
 
 See [SECURITY.md](SECURITY.md) for the Docker socket risk, noVNC/VNC assumptions,
 and future hardening options.
@@ -189,6 +214,8 @@ Runtime configuration is centralized in `computer_use_demo/api/config.py`.
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | empty | Required to run real Claude Computer Use tasks. |
 | `ORCHESTRATOR_API_TOKEN` | empty | Optional bearer token for session-scoped API endpoints. |
+| `DEV_USER_ID` | `dev-user` | Local auth adapter fallback user when `X-User-Id` is absent. |
+| `DEV_ORG_ID` | `dev-org` | Local auth adapter fallback organization when `X-Org-Id` is absent. |
 | `COMPUTER_USE_DB_PATH` | `data/orchestrator.db` | SQLite database path. |
 | `PUBLIC_HOST` | `127.0.0.1` | Host used when returning frontend/noVNC URLs. |
 | `WORKER_CONNECT_HOST` | `127.0.0.1` | Host the orchestrator uses to call worker HTTP APIs. |
@@ -229,7 +256,9 @@ GET    /readyz
 ```
 
 `/healthz`, `/readyz`, and `/docs` are public local diagnostics. Session-scoped
-endpoints are protected when `ORCHESTRATOR_API_TOKEN` is configured.
+endpoints are protected when `ORCHESTRATOR_API_TOKEN` is configured and always
+enforce local development ownership with `X-User-Id` / `X-Org-Id` or the
+`DEV_USER_ID` / `DEV_ORG_ID` fallbacks.
 
 ## Development Commands
 
