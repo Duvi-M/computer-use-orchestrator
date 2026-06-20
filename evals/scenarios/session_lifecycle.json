@@ -1,0 +1,23 @@
+{
+  "name": "offline_session_lifecycle",
+  "goal": "Open a browser, search for the current weather in Tokyo, and tell me the temperature.",
+  "success_criteria": [
+    "session_created",
+    "worker_ready",
+    "evidence_recorded",
+    "session_finished"
+  ],
+  "budgets": {
+    "runtime_seconds": 120,
+    "idle_seconds": 30,
+    "max_messages": 3,
+    "max_events": 20,
+    "max_tokens": 2000,
+    "max_cost_usd": 0.5
+  },
+  "tool_grants": [
+    "browser",
+    "desktop",
+    "network"
+  ]
+}

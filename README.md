@@ -1,4 +1,4 @@
-# Claude Computer Use Session Orchestrator
+# Computer-Use Agent Harness / Agentic Orchestrator
 
 A production-style SaaS-oriented FastAPI orchestration prototype for running
 Claude Computer Use as isolated, session-based backend workloads. The system
@@ -11,26 +11,50 @@ exercise: tenancy, ownership checks, lifecycle limits, protected UI access,
 worker-launch abstraction, observability, migrations, and retention foundations
 are implemented while preserving a simple local demo.
 
+## What This Is
+
+This repository is an agentic harness for computer-use agents. It gives each
+user session a controlled lifecycle, isolated desktop worker, event stream,
+persistent history, safety budgets, protected UI access, and operator
+visibility.
+
+It is not just an API wrapper around Claude. The orchestrator owns the harness
+responsibilities around execution: start, observe, constrain, persist, evaluate,
+and stop.
+
 ## Project Status
 
 Current status: production-style SaaS prototype.
 
 - Works locally end to end: browser frontend, FastAPI orchestrator, Docker
   worker, Claude Computer Use, SSE events, noVNC, and persisted history.
-- SaaS foundations are implemented: auth/tenancy shape, ownership checks,
+- Harness and SaaS foundations are implemented: auth/tenancy shape, ownership checks,
   lifecycle limits, protected UI links, launcher boundary, observability,
   PostgreSQL migrations, retention policy, and artifact metadata.
 - Not yet implemented: hosted auth, remote worker launcher, object storage,
   deployment hardening, billing, compliance controls, and production admin
   roles.
 
-## Why It Exists
+## Why This Is A Harness
 
 Computer-use agents are expensive, stateful, and operationally risky. They need
 more than a chat endpoint: they need worker isolation, session lifecycle
 controls, event streaming, desktop access, auditability, retention policy, and
 clear security boundaries. This repo keeps those concerns visible without
 prematurely adding Kubernetes, queues, billing, or a frontend framework.
+
+Harness responsibilities represented here:
+
+- session lifecycle from create/start/ready/run/complete/fail/delete
+- isolated one-worker-per-session execution
+- SSE event stream and persisted history
+- runtime, idle, message, and event budgets
+- execution contracts and durable raw traces
+- tool grant and eval-gate primitives
+- dynamic workflow pattern docs
+- protected noVNC access
+- worker launcher abstraction
+- observability and admin safety visibility
 
 ## What Works Today
 
@@ -49,8 +73,14 @@ prematurely adding Kubernetes, queues, billing, or a frontend framework.
   `LocalDockerWorkerLauncher`.
 - SQLite default persistence plus PostgreSQL/Alembic production path.
 - Artifact metadata and retention cleanup foundation.
+- Harness primitives for goals, plans, actions, observations, evidence, eval
+  gates, escalation decisions, execution contracts, budgets, tool grants,
+  traces, and triggers.
+- Local file-backed harness memory for recording and recalling evidence by
+  keyword, with optional mem0 backend only when a valid OpenAI key is present.
+- Offline eval and safe parallel-session/parallel-workflow demo scripts.
 - Focused tests for auth, limits, UI tokens, launcher behavior, observability,
-  database config, migrations, retention, and worker APIs.
+  database config, migrations, retention, harness primitives, and worker APIs.
 
 ## Architecture
 
@@ -85,6 +115,208 @@ Text flow:
 Frontend -> FastAPI orchestrator -> WorkerLauncher -> Docker worker
          -> Claude Computer Use -> SSE/noVNC -> SQLite/Postgres history
 ```
+
+## Agent Loop
+
+The current Claude Computer Use loop still runs inside the worker. The harness
+now exposes the surrounding control model in `computer_use_demo/harness/`:
+
+```text
+goal -> plan -> action -> observation/evidence -> evaluation -> next step/escalation
+```
+
+Implemented primitives:
+
+- `Goal`, `Plan`, `AgentAction`
+- `Observation`, `Evidence`
+- `EvalGate`, `EvalGateResult`
+- `EscalationDecision`
+- `TriggerDispatcher`
+
+These primitives are intentionally lightweight. They document the contract and
+support tests/evals without replacing the worker execution path.
+
+For a bounded CLI demo of the durable loop:
+
+```bash
+python3 -m computer_use_demo.harness.runner \
+  --goal-id tokyo-run \
+  --goal-text "search Tokyo weather" \
+  --interval-seconds 0.1 \
+  --max-iterations 8
+```
+
+The runner checkpoints state frequently under `data/checkpoints/`, but only
+records semantic memory when evidence content changes. Repeated checkpoint
+ticks do not create duplicate memory entries.
+
+## Execution Contracts
+
+`ExecutionContract` makes each task/session explicit before work starts:
+
+- required outputs
+- runtime/message/event/token/cost budgets
+- permissions/tool grants
+- completion conditions
+- output/evidence paths
+- escalation policy
+
+This is the core harness principle: the agent does not execute freely. It runs
+inside a contract that can be checked by budget logic, eval gates, durable
+traces, and human escalation.
+
+## Session Lifecycle
+
+Sessions move through explicit statuses such as `created`, `starting`, `ready`,
+`running`, `completed`, `failed`, `stopped`, `expired`, `deleted`, and `killed`.
+The orchestrator enforces ownership, lifecycle validity, runtime/idle expiry,
+message limits, event limits, and worker cleanup.
+
+Lifecycle events are persisted so an operator can inspect what happened after a
+session stops. Deletes are logical first; retained history is cleaned later by
+retention policy.
+
+## Worker Isolation
+
+The invariant is one worker container per session. `LocalDockerWorkerLauncher`
+preserves local Docker behavior behind the `WorkerLauncher` protocol:
+
+- local port allocation
+- container labels
+- readiness checks
+- CPU, memory, and PID limits
+- worker message/event/status/noVNC metadata
+- orphan cleanup
+
+The local Docker socket is still a trusted-development boundary. Production
+should replace it with a remote/internal launcher.
+
+## Budgets And Safety
+
+Implemented budgets:
+
+- concurrent sessions per user/org
+- max runtime
+- max idle time
+- max messages per session
+- max events per session
+- platform/global kill switches
+
+Harness placeholders:
+
+- token budget
+- provider cost budget
+
+Budget failures are represented as quota/lifecycle events and can drive trigger
+or escalation policy.
+
+## Tool Grants
+
+`computer_use_demo/harness/tool_grants.py` models session-level grants for:
+
+- browser
+- shell
+- file system
+- desktop/computer-use
+- network
+
+The current worker remains trusted local demo infrastructure; this grant model
+is the explicit contract for future enforcement and review.
+
+## Durable Traces
+
+`TraceStore` writes raw JSON traces under a caller-provided directory, typically
+`data/traces/...` for local demos. Traces can include:
+
+- session id and goal
+- actions
+- observations
+- tool calls/events
+- budget usage
+- final status and failure reason
+- evidence/artifact paths
+
+This gives the harness file-backed state for debugging, restarts, evals, and
+partial replay. The production roadmap is to back traces with durable storage
+and stronger retention controls.
+
+## Evals
+
+The `evals/` directory contains a safe offline benchmark shape:
+
+```bash
+python3 evals/run_eval.py --json
+```
+
+It simulates session creation, worker readiness, goal execution, evidence
+recording, eval gates, budgets, triggers, and session finish. It does not call
+Anthropic, launch Docker, or require Postgres.
+
+## Interview Demo CLI
+
+For the 10-minute live interview path, use:
+
+```bash
+python3 scripts/interview_demo.py map
+python3 scripts/interview_demo.py loop
+python3 scripts/interview_demo.py memory
+python3 scripts/interview_demo.py eval
+python3 scripts/interview_demo.py agents
+```
+
+Full guide: [docs/INTERVIEW_DEMO.md](docs/INTERVIEW_DEMO.md).
+
+| Vacancy signal | Repo area | Demo command |
+| --- | --- | --- |
+| Spec-driven development | `specs/` and `specs/spec-kit/` | `python3 scripts/interview_demo.py map` |
+| Agentic loop | `computer_use_demo/harness/runner.py` | `python3 scripts/interview_demo.py loop` |
+| Memory | `computer_use_demo/harness/memory.py` | `python3 scripts/interview_demo.py memory` |
+| Evals | `evals/run_eval.py` | `python3 scripts/interview_demo.py eval` |
+| Parallel orchestration | worktrees + shared queue | `python3 scripts/interview_demo.py agents` |
+
+## Dynamic Workflow Patterns
+
+Documented examples live in `examples/workflows/`:
+
+- `classify_and_act`
+- `fan_out_and_synthesize`
+- `adversarial_verification`
+- `generate_and_filter`
+- `tournament`
+- `loop_until_done`
+
+Implemented today: lightweight contracts, budgets, traces, eval gates, triggers,
+and safe parallel workflow simulation. Roadmap: live workflow runner, durable
+queue, goal graph, memory layer, independent verifier service, and single-writer
+locks.
+
+## Verification Strategy
+
+The harness should not accept “done” by assertion alone. Completion should be
+evidence-based:
+
+- eval gates check required evidence and terminal loop state
+- execution contracts define required outputs
+- raw traces retain actions, observations, events, budgets, and failure reasons
+- independent verifier workflows are documented for high-risk tasks
+- human-in-the-loop escalation is the policy for ambiguous or dangerous actions
+
+Failure modes addressed by the design:
+
+- agent laziness: required outputs and eval gates expose incomplete work
+- self-preference: adversarial verification is documented as a separate pattern
+- goal drift: the original contract remains durable and reloadable
+- premature completion: completion requires evidence, not just a final message
+- context exhaustion: traces and persisted state reduce context-window reliance
+
+Prefer narrow retry loops:
+
+```text
+attempt -> evaluate -> patch -> retry
+```
+
+Do not use dynamic workflows for obvious bugs, small mechanical changes, or
+tasks where a direct edit plus tests is simpler and safer.
 
 ## SaaS Evolution Summary
 
@@ -249,7 +481,7 @@ Future launcher values are documented roadmap placeholders only:
 
 More detail: [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md).
 
-## Observability And Admin
+## Observability
 
 Useful endpoints:
 
@@ -296,9 +528,11 @@ Key variables are listed in [.env.example](.env.example). The main groups are:
   `SCREENSHOT_RETENTION_DAYS`, `WORKER_LOG_RETENTION_DAYS`,
   `DELETED_SESSION_RETENTION_DAYS`, `ARTIFACT_STORAGE_DIR`,
   `CLEANUP_RETENTION_ON_STARTUP`
+- harness memory: `HARNESS_MEMORY_USER_ID`, `HARNESS_MEMORY_FILE`,
+  `HARNESS_MEMORY_EMBEDDING_MODEL`
 - observability: `LOG_LEVEL`, `LOG_FORMAT`
 
-## 5-Minute Demo Script
+## Demo For Interview
 
 1. Run `make test`.
 2. Run `make build-worker`.
@@ -320,6 +554,14 @@ Open a browser, search for the current weather in Tokyo, and tell me the tempera
 12. Explain SaaS boundaries: local auth adapter, one worker per session,
     PostgreSQL-ready persistence, protected UI tokens, retention metadata, and
     what remains before hosted SaaS.
+
+Optional harness demos:
+
+```bash
+python3 evals/run_eval.py --json
+python3 scripts/demo_parallel_sessions.py --count 3
+python3 scripts/demo_parallel_workflows.py --count 3
+```
 
 Longer guide: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
@@ -356,6 +598,12 @@ Anthropic API call.
 - Deployment profile with TLS, secrets management, and observability backend.
 - Optional Prometheus/OpenTelemetry metrics/tracing.
 - Worker reattachment/reconciliation after orchestrator restart.
+- Temporal knowledge graph for session/evidence state.
+- Task queue and explicit goal graph.
+- Kubernetes launcher as a later worker backend.
+- Multi-agent shared task list.
+- Worktree isolation for code-writing agents.
+- Single-writer locks for shared resources.
 
 ## Additional Docs
 
@@ -363,4 +611,7 @@ Anthropic API call.
 - [SaaS Evolution](docs/SAAS_EVOLUTION.md)
 - [Security Model](docs/SECURITY_MODEL.md)
 - [Operations](docs/OPERATIONS.md)
+- [Interview Demo](docs/INTERVIEW_DEMO.md)
 - [Demo Script](docs/DEMO_SCRIPT.md)
+- [Specs](specs/README.md)
+- [Workflow Examples](examples/workflows/)

@@ -33,6 +33,7 @@ env/
 logs/
 data/
 artifacts/
+worktrees/
 *.artifact
 *.db
 *.sqlite

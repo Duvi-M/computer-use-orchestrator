@@ -1,7 +1,9 @@
 # Architecture
 
 This project orchestrates Claude Computer Use sessions as backend workloads. The
-primary invariant is one worker container per session.
+primary invariant is one worker container per session. The surrounding FastAPI
+service acts as an agentic harness: it owns lifecycle, budgets, event streams,
+persistence, eval gates, safety controls, and operator visibility.
 
 ## System Diagram
 
@@ -65,6 +67,18 @@ Persisted objects:
 Only `local_docker` is implemented today. Future launchers can move worker
 creation to an internal service, Fargate, Fly Machines, or another controlled
 runtime without changing the session API shape.
+
+## Harness Layer
+
+`computer_use_demo/harness/` contains explicit primitives for the interview
+architecture vocabulary:
+
+- goal, plan, action, observation, evidence
+- execution contracts and raw traces
+- eval gates and escalation decisions
+- runtime/message/event/token/cost budget model
+- browser, shell, file system, desktop, and network tool grants
+- internal event triggers for lifecycle, budget, error, eval, and completion
 
 ## Intentional Non-Choices
 

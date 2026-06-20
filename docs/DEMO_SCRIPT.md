@@ -22,6 +22,14 @@ make run-web
 
 Open `http://127.0.0.1:5173`.
 
+Optional harness demos:
+
+```bash
+python3 evals/run_eval.py --json
+python3 scripts/demo_parallel_sessions.py --count 3
+python3 scripts/demo_parallel_workflows.py --count 3
+```
+
 ## Live Flow
 
 1. Click `Clear local`.
@@ -53,10 +61,13 @@ http://127.0.0.1:9000/admin/retention
 ## Talk Track
 
 - The product concept is SaaS-style orchestration for computer-use agent
-  sessions.
+  sessions and an agentic harness around their execution.
 - Each session has one isolated Docker desktop worker.
 - The FastAPI orchestrator owns tenancy, lifecycle limits, worker launch,
   protected UI access, SSE persistence, and retention metadata.
+- Harness primitives model goals, plans, actions, observations, evidence,
+  execution contracts, budgets, tool grants, eval gates, durable traces,
+  triggers, and escalation decisions.
 - SQLite keeps the local demo simple; PostgreSQL/Alembic is the production data
   path.
 - The worker launcher boundary is ready for a future remote launcher.

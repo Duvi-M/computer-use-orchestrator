@@ -1,4 +1,4 @@
-.PHONY: install test test-project test-legacy test-all smoke-local db-up db-migrate db-down build-worker run-api run-web clean-workers clean-local
+.PHONY: install test test-project test-legacy test-all smoke-local interview-check db-up db-migrate db-down build-worker run-api run-web clean-workers clean-local
 
 PROJECT_TESTS := tests/test_api_app.py tests/test_config.py tests/test_db.py tests/test_migrations.py tests/test_orchestrator_sessions.py tests/test_worker_api.py tests/test_worker_manager.py tests/test_worker_launcher.py
 LEGACY_TESTS := tests/loop_test.py tests/streamlit_test.py tests/tools
@@ -25,6 +25,9 @@ test-all:
 
 smoke-local:
 	.venv/bin/python -B scripts/smoke_local.py
+
+interview-check:
+	$(PYTHON) -B scripts/interview_demo.py check
 
 db-up:
 	docker compose --profile postgres up -d postgres
