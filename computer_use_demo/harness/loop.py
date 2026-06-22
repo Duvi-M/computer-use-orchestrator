@@ -72,6 +72,8 @@ class AgentLoopState:
     observations: list[Observation] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
     escalations: list[EscalationDecision] = field(default_factory=list)
+    retry_count: int = 0
+    current_plan_description: str = ""
 
     def set_plan(self, plan: Plan) -> None:
         self.plan = plan

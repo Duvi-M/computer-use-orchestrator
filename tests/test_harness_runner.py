@@ -4,15 +4,35 @@ import json
 
 import pytest
 
+from computer_use_demo.harness.eval_gates import EvalGate, EvalGateResult
 from computer_use_demo.harness.runner import (
     advance_state,
     create_state,
+    evaluate_dynamic_workflow,
     load_checkpoint,
     main,
     print_related_memories,
     run_loop,
     save_checkpoint,
 )
+
+
+def always_failing_gate() -> EvalGate:
+    return EvalGate(
+        name="always_fails",
+        check=lambda state: EvalGateResult(
+            passed=False,
+            gate_name="always_fails",
+            reason=f"forced failure with {len(state.observations)} observations",
+        ),
+    )
+
+
+def always_passing_gate() -> EvalGate:
+    return EvalGate(
+        name="always_passes",
+        check=lambda state: EvalGateResult(passed=True, gate_name="always_passes"),
+    )
 
 
 def test_checkpoint_is_written_and_reloaded(tmp_path):
@@ -37,6 +57,68 @@ def test_checkpoint_is_written_and_reloaded(tmp_path):
     assert payload["state"]["goal"]["goal_id"] == "goal-1"
     assert payload["checkpointed_at"]
     assert not list(checkpoint_dir.glob(".*.tmp"))
+
+
+def test_dynamic_workflow_retries_until_max_retries_then_escalates(tmp_path, capsys):
+    checkpoint_dir = tmp_path / "checkpoints"
+    state = create_state("dynamic-fail", "test dynamic replanning")
+    state.phase = "evaluation"
+
+    evaluate_dynamic_workflow(
+        state,
+        max_retries=2,
+        evaluation_gates=(always_failing_gate(),),
+    )
+    assert state.phase == "action"
+    assert state.retry_count == 1
+    assert state.plan is not None
+    assert state.plan.steps[0].startswith("retry attempt 1:")
+
+    state.phase = "evaluation"
+    evaluate_dynamic_workflow(
+        state,
+        max_retries=2,
+        evaluation_gates=(always_failing_gate(),),
+    )
+    assert state.phase == "action"
+    assert state.retry_count == 2
+
+    state.phase = "evaluation"
+    evaluate_dynamic_workflow(
+        state,
+        max_retries=2,
+        evaluation_gates=(always_failing_gate(),),
+    )
+
+    path = save_checkpoint(state, checkpoint_dir)
+    payload = json.loads(path.read_text())
+    output = capsys.readouterr().out
+
+    assert state.phase == "escalation"
+    assert state.retry_count == 2
+    assert state.escalations[-1].reason == "max retries exceeded"
+    assert payload["state"]["retry_count"] == 2
+    assert payload["state"]["current_plan_description"] == "max retries exceeded -> escalating"
+    assert "eval gate failed:" in output
+    assert "max retries exceeded -> escalating" in output
+
+
+def test_dynamic_workflow_continues_when_gate_passes(capsys):
+    state = create_state("dynamic-pass", "test dynamic pass")
+    state.phase = "evaluation"
+
+    evaluate_dynamic_workflow(
+        state,
+        max_retries=2,
+        evaluation_gates=(always_passing_gate(),),
+    )
+
+    output = capsys.readouterr().out
+
+    assert state.phase == "next_step"
+    assert state.retry_count == 0
+    assert state.current_plan_description == "eval gate passed -> continuing"
+    assert "eval gate passed -> continuing" in output
 
 
 def test_corrupt_checkpoint_is_moved_aside_and_starts_fresh(tmp_path, capsys):
