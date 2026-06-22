@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import time
 from dataclasses import asdict
@@ -36,11 +37,13 @@ def checkpoint_path(goal_id: str, checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR)
 def save_checkpoint(state: AgentLoopState, checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR) -> Path:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     path = checkpoint_path(state.goal.goal_id, checkpoint_dir)
+    tmp_path = path.with_name(f".{path.name}.tmp")
     payload = {
         "checkpointed_at": utc_timestamp(),
         "state": asdict(state),
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    os.replace(tmp_path, path)
     return path
 
 
@@ -116,7 +119,19 @@ def load_checkpoint(goal_id: str, checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR)
     path = checkpoint_path(goal_id, checkpoint_dir)
     if not path.exists():
         return None
-    return state_from_dict(json.loads(path.read_text()))
+    try:
+        return state_from_dict(json.loads(path.read_text()))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        corrupted_path = path.with_name(
+            f"{path.name}.corrupted-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        )
+        path.replace(corrupted_path)
+        print(  # noqa: T201
+            f"[{utc_timestamp()}] corrupt checkpoint detected at {path}; "
+            f"moved to {corrupted_path}; starting fresh ({exc})",
+            flush=True,
+        )
+        return None
 
 
 def create_state(goal_id: str, goal_text: str) -> AgentLoopState:
@@ -344,6 +359,10 @@ def main() -> int:
     parser.add_argument("--max-iterations", type=int)
     args = parser.parse_args()
 
+    if not args.goal_id.strip():
+        parser.error("--goal-id must not be empty")
+    if not args.goal_text.strip():
+        parser.error("--goal-text must not be empty")
     if args.interval_seconds <= 0:
         parser.error("--interval-seconds must be > 0")
     if args.memory_recall_limit < 1:
@@ -352,8 +371,8 @@ def main() -> int:
         parser.error("--max-iterations must be >= 1")
 
     run_loop(
-        goal_id=args.goal_id,
-        goal_text=args.goal_text,
+        goal_id=args.goal_id.strip(),
+        goal_text=args.goal_text.strip(),
         checkpoint_dir=args.checkpoint_dir,
         interval_seconds=args.interval_seconds,
         enable_memory=not args.disable_memory,

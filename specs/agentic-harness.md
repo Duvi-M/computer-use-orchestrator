@@ -18,7 +18,8 @@ evidence, safety, observability, and recovery.
 ## Non-Goals
 
 - Build a new planner or model runtime.
-- Add multi-agent scheduling yet.
+- Add production-grade multi-agent scheduling yet; the local coordination demo
+  is documented separately in `specs/multi-agent-harness.md`.
 - Add a production memory graph yet.
 - Replace FastAPI, SSE, Docker workers, or noVNC.
 

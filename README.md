@@ -1,39 +1,84 @@
-# Computer-Use Agent Harness / Agentic Orchestrator
+# Agentic Harness for Computer-Use Agents
 
-A production-style SaaS-oriented FastAPI orchestration prototype for running
-Claude Computer Use as isolated, session-based backend workloads. The system
-creates one Docker desktop worker per session, streams agent activity over SSE,
-exposes the worker desktop through noVNC, and persists history in SQLite or
-PostgreSQL.
+Spec-driven control plane for computer-use agents: goals become execution
+contracts, plans, bounded actions, observations, evidence, eval-gate decisions,
+memory records, traces, and escalation paths.
 
-This is not a hosted SaaS yet. It is a SaaS-oriented backend architecture
-exercise: tenancy, ownership checks, lifecycle limits, protected UI access,
-worker-launch abstraction, observability, migrations, and retention foundations
-are implemented while preserving a simple local demo.
+The primary story is the harness:
+
+```text
+Spec -> ExecutionContract -> AgentLoopState
+     -> Worker Events -> Observation/Evidence
+     -> EvalGates -> Traces/Memory
+     -> Next Step / Escalation
+```
+
+The FastAPI/Docker/noVNC system remains as a real runtime backend surface for
+Claude Computer Use sessions. It is useful because the harness can consume
+real worker-style events, but it is not the whole product story.
+
+This is not a hosted SaaS yet. It is a production-style agentic harness and
+runtime backend prototype built to make agent execution observable, bounded,
+recoverable, and evidence-driven.
 
 ## What This Is
 
-This repository is an agentic harness for computer-use agents. It gives each
-user session a controlled lifecycle, isolated desktop worker, event stream,
-persistent history, safety budgets, protected UI access, and operator
-visibility.
+This repository demonstrates how to scaffold autonomous computer-use agents:
 
-It is not just an API wrapper around Claude. The orchestrator owns the harness
-responsibilities around execution: start, observe, constrain, persist, evaluate,
-and stop.
+- spec-driven feature definitions in custom spec format and manually written
+  GitHub Spec Kit-style `spec.md`/`plan.md`/`tasks.md` files
+- `goal -> plan -> action -> observation -> evidence -> evaluation` loop
+- execution contracts with required outputs, budgets, grants, completion
+  conditions, and escalation policy
+- eval gates so completion depends on evidence, not self-reporting
+- file-backed local memory with optional mem0 backend
+- durable raw traces for replay, debugging, and evals
+- tmux/checkpoint persistence for long-running local agent loops
+- parallel worktree-isolated agents coordinated by a shared SQLite task queue
+- FastAPI/Docker worker runtime as a secondary surface for real Computer Use
+
+It is intentionally not just an API wrapper around Claude. The repo models the
+control plane around execution: specify, start, observe, constrain, persist,
+evaluate, remember, and decide what should happen next.
 
 ## Project Status
 
-Current status: production-style SaaS prototype.
+Current status: production-style agentic harness prototype.
 
 - Works locally end to end: browser frontend, FastAPI orchestrator, Docker
   worker, Claude Computer Use, SSE events, noVNC, and persisted history.
-- Harness and SaaS foundations are implemented: auth/tenancy shape, ownership checks,
-  lifecycle limits, protected UI links, launcher boundary, observability,
-  PostgreSQL migrations, retention policy, and artifact metadata.
+- Harness and runtime foundations are implemented: specs, loop state,
+  contracts, budgets, eval gates, memory, traces, triggers, tmux persistence,
+  parallel queue demos, worker event adapter, and FastAPI/Docker runtime
+  integration.
 - Not yet implemented: hosted auth, remote worker launcher, object storage,
   deployment hardening, billing, compliance controls, and production admin
   roles.
+
+## BOS.PRO Requirement Mapping
+
+| Requirement | Project Evidence | Status |
+| --- | --- | --- |
+| Spec-Driven Dev | `specs/`, `specs/spec-kit/`, `.specify/`, `specs/001-multi-agent-orchestration/`, `docs/INTERVIEW_DEMO.md` | Implemented: custom specs plus manually written GitHub Spec Kit-style files; additionally verified with the official GitHub Spec Kit CLI via `specify init --here --force --integration claude` and `/speckit.specify`, producing `.specify/` and `specs/001-multi-agent-orchestration/spec.md` |
+| Agentic Scaffolding | `computer_use_demo/harness/` | Implemented |
+| Goal/Plan/Action Loop | `loop.py`, `runner.py`, `SessionHarness` | Implemented |
+| Execution Contracts | `contracts.py`, `ExecutionContract` | Implemented |
+| Budgets | `budgets.py`, API session limits | Implemented |
+| Eval Gates | `eval_gates.py`, `evals/run_eval.py` | Implemented |
+| Memory Layer | `memory.py` file-backed memory, mem0 optional | Implemented: file-backed local memory verified live with keyword recall; mem0 backend is wired but only auto-activates with a valid OpenAI key and is not yet exercised end-to-end in the live demo |
+| Traces | `traces.py`, `SessionHarness` trace output | Implemented |
+| tmux persistence | `run_harness_tmux.sh`, checkpoints, tmux-resurrect/continuum | Verified live outside sandbox: `harness-demo` runner session restored after a real macOS reboot using tmux-resurrect + tmux-continuum, with `data/checkpoints/tokyo-run.json` intact |
+| Parallel agents | `interview_demo.py agents`, `spawn_agents.sh` | Implemented: 6 agents (>5) verified live via `interview_demo.py`'s thread-based demo with task distribution across all agents and zero duplicate claims; 3-agent tmux/worktree version also verified separately; 10+ agent / 100+ task load testing and production-grade fairness metrics remain future work |
+| Worktree isolation | `spawn_agents.sh` creates `worktrees/agent-N` | Implemented for the local demo with git worktrees; production code-writing reconciliation remains future work |
+| Shared task queue | `shared_task_queue.py` with `BEGIN IMMEDIATE` | Implemented locally with SQLite single-writer claims; distributed or multi-host queueing remains future work |
+| FastAPI/Docker runtime | `computer_use_demo/api/`, `WorkerLauncher` | Implemented as runtime backend |
+
+Additional external harness evidence: Claude Code Agent Teams was tested outside
+the repo's runtime path with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`: three
+Claude Code agents ran in separate git worktrees using Claude Code's native
+shared task list to audit tests, spec/code consistency, and documentation
+contradictions. This was an isolated learning/evidence exercise; it is not
+integrated into this repository's harness runtime.
 
 ## Why This Is A Harness
 
@@ -76,13 +121,37 @@ Harness responsibilities represented here:
 - Harness primitives for goals, plans, actions, observations, evidence, eval
   gates, escalation decisions, execution contracts, budgets, tool grants,
   traces, and triggers.
+- `SessionHarness` adapter that maps real worker-style events into
+  observations, evidence, eval-gate results, and durable traces.
 - Local file-backed harness memory for recording and recalling evidence by
   keyword, with optional mem0 backend only when a valid OpenAI key is present.
 - Offline eval and safe parallel-session/parallel-workflow demo scripts.
 - Focused tests for auth, limits, UI tokens, launcher behavior, observability,
   database config, migrations, retention, harness primitives, and worker APIs.
 
-## Architecture
+## Harness Architecture
+
+```mermaid
+flowchart LR
+    Spec["Spec / Feature Intent"] --> Contract["ExecutionContract"]
+    Contract --> State["AgentLoopState"]
+    State --> Plan["Goal / Plan / Action"]
+    Plan --> Runtime["Worker Events"]
+    Runtime --> Obs["Observation"]
+    Runtime --> Ev["Evidence"]
+    Obs --> Gates["EvalGates"]
+    Ev --> Gates
+    Gates --> Trace["RawTrace / TraceStore"]
+    Gates --> Memory["HarnessMemory"]
+    Gates --> Decision["Next Step / Escalation"]
+```
+
+More detail: [docs/HARNESS_ARCHITECTURE.md](docs/HARNESS_ARCHITECTURE.md).
+
+## Runtime Backend: FastAPI + Docker Workers
+
+The runtime backend is the secondary surface that gives the harness real
+computer-use events to observe. It preserves the existing local demo:
 
 ```mermaid
 flowchart LR
@@ -261,6 +330,7 @@ python3 scripts/interview_demo.py map
 python3 scripts/interview_demo.py loop
 python3 scripts/interview_demo.py memory
 python3 scripts/interview_demo.py eval
+python3 scripts/interview_demo.py session-harness
 python3 scripts/interview_demo.py agents
 ```
 
@@ -272,6 +342,7 @@ Full guide: [docs/INTERVIEW_DEMO.md](docs/INTERVIEW_DEMO.md).
 | Agentic loop | `computer_use_demo/harness/runner.py` | `python3 scripts/interview_demo.py loop` |
 | Memory | `computer_use_demo/harness/memory.py` | `python3 scripts/interview_demo.py memory` |
 | Evals | `evals/run_eval.py` | `python3 scripts/interview_demo.py eval` |
+| Runtime adapter | `computer_use_demo/harness/session_harness.py` | `python3 scripts/interview_demo.py session-harness` |
 | Parallel orchestration | worktrees + shared queue | `python3 scripts/interview_demo.py agents` |
 
 ## Dynamic Workflow Patterns
@@ -286,9 +357,10 @@ Documented examples live in `examples/workflows/`:
 - `loop_until_done`
 
 Implemented today: lightweight contracts, budgets, traces, eval gates, triggers,
-and safe parallel workflow simulation. Roadmap: live workflow runner, durable
-queue, goal graph, memory layer, independent verifier service, and single-writer
-locks.
+file-backed memory, SQLite single-writer task claims, and safe parallel workflow
+simulation. Roadmap: live workflow runner, durable distributed queue, explicit
+goal graph, temporal knowledge graph memory, independent verifier service, and
+production scheduling metrics.
 
 ## Verification Strategy
 
@@ -587,6 +659,12 @@ Anthropic API call.
 - Artifact bytes are local files, not S3/object storage.
 - `/metrics` is JSON, not Prometheus format.
 - The frontend is a demo console, not a production SaaS UI.
+- File-backed harness memory is flat keyword recall; mem0 is wired as an
+  optional backend but is not yet exercised end-to-end in the live demo.
+- Parallel agent orchestration is verified as a local 6-agent (>5) thread-based
+  demo with 24/24 tasks completed and no duplicate claims; the larger 10+
+  agent / 100+ task load test from the official Spec Kit success criteria and
+  production-grade fairness metrics remain unverified.
 
 ## Roadmap
 
@@ -599,15 +677,16 @@ Anthropic API call.
 - Optional Prometheus/OpenTelemetry metrics/tracing.
 - Worker reattachment/reconciliation after orchestrator restart.
 - Temporal knowledge graph for session/evidence state.
-- Task queue and explicit goal graph.
+- Explicit goal graph/task graph beyond the current SQLite demo queue.
 - Kubernetes launcher as a later worker backend.
-- Multi-agent shared task list.
-- Worktree isolation for code-writing agents.
-- Single-writer locks for shared resources.
+- Production-grade multi-agent scheduling with 10+ agent / 100+ task load tests
+  and fairness metrics.
+- Distributed queue/lock backend for multi-host workers.
 
 ## Additional Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Harness Architecture](docs/HARNESS_ARCHITECTURE.md)
 - [SaaS Evolution](docs/SAAS_EVOLUTION.md)
 - [Security Model](docs/SECURITY_MODEL.md)
 - [Operations](docs/OPERATIONS.md)

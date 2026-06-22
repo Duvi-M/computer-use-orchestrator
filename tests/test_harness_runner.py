@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from computer_use_demo.harness.runner import (
     advance_state,
     create_state,
     load_checkpoint,
+    main,
     print_related_memories,
     run_loop,
     save_checkpoint,
@@ -33,6 +36,61 @@ def test_checkpoint_is_written_and_reloaded(tmp_path):
     payload = json.loads(path.read_text())
     assert payload["state"]["goal"]["goal_id"] == "goal-1"
     assert payload["checkpointed_at"]
+    assert not list(checkpoint_dir.glob(".*.tmp"))
+
+
+def test_corrupt_checkpoint_is_moved_aside_and_starts_fresh(tmp_path, capsys):
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    checkpoint = checkpoint_dir / "goal-corrupt.json"
+    checkpoint.write_text("{not valid json", encoding="utf-8")
+
+    loaded = load_checkpoint("goal-corrupt", checkpoint_dir)
+
+    output = capsys.readouterr().out
+    corrupted_files = list(checkpoint_dir.glob("goal-corrupt.json.corrupted-*"))
+
+    assert loaded is None
+    assert "corrupt checkpoint detected" in output
+    assert "starting fresh" in output
+    assert not checkpoint.exists()
+    assert len(corrupted_files) == 1
+
+
+def test_runner_cli_rejects_empty_goal_id(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner",
+            "--goal-id",
+            "   ",
+            "--goal-text",
+            "search Tokyo weather",
+            "--max-iterations",
+            "1",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+def test_runner_cli_rejects_empty_goal_text(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner",
+            "--goal-id",
+            "goal-1",
+            "--goal-text",
+            "   ",
+            "--max-iterations",
+            "1",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
 
 
 class FakeFallbackMemory:

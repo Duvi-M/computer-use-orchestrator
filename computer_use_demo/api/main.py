@@ -44,6 +44,7 @@ from computer_use_demo.api.worker_launcher import (
     WorkerReadyError,
     get_worker_launcher,
 )
+from computer_use_demo.harness import SessionBudgets, SessionHarness
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -355,6 +356,7 @@ class SessionState:
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
     worker: WorkerInfo | None = None
+    harness: SessionHarness | None = None
 
 
 SESSIONS: dict[str, SessionState] = {}
@@ -868,6 +870,17 @@ def _session_busy(s: SessionState) -> bool:
     return bool(s.task and not s.task.done())
 
 
+def _session_harness_budgets() -> SessionBudgets:
+    settings = get_settings()
+    return SessionBudgets(
+        runtime_seconds=settings.max_session_runtime_seconds,
+        idle_seconds=settings.max_idle_session_seconds,
+        max_messages=settings.max_messages_per_session,
+        max_events=settings.max_events_per_session,
+        max_tokens=settings.max_tokens,
+    )
+
+
 async def _run_worker_message(session_id: str, s: SessionState, text: str) -> None:
     if not s.worker:
         update_session_status(
@@ -1021,6 +1034,16 @@ def _persist_worker_event(session_id: str, event_name: str, data: dict[str, Any]
             event_name,
             ",".join(sorted(data.keys())),
         )
+        session = SESSIONS.get(session_id)
+        if session and session.harness:
+            try:
+                session.harness.on_worker_event(event_name, data)
+            except Exception:
+                logger.exception(
+                    "session_harness_event_failed session_id=%s event=%s",
+                    session_id,
+                    event_name,
+                )
 
         if event_name == "assistant_block":
             text = str(data.get("text") or "")
@@ -1035,12 +1058,10 @@ def _persist_worker_event(session_id: str, event_name: str, data: dict[str, Any]
                 completed=True,
                 stop_reason=f"{stage}_failed" if stage else "worker_error",
             )
-            session = SESSIONS.get(session_id)
             if session:
                 session.completion_event.set()
         elif event_name == "done":
             update_session_status(session_id, STATUS_COMPLETED, completed=True)
-            session = SESSIONS.get(session_id)
             if session:
                 session.completion_event.set()
     except Exception:
@@ -1466,6 +1487,11 @@ async def post_message(
 
         _touch(s)
         insert_message(session_id, "user", text)
+        s.harness = SessionHarness.create(
+            session_id=session_id,
+            goal_text=text,
+            budgets=_session_harness_budgets(),
+        )
         update_session_status(session_id, STATUS_RUNNING)
         s.completion_event.clear()
         s.task = asyncio.create_task(_run_worker_message(session_id, s, text))

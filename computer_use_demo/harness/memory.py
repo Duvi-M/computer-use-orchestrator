@@ -68,7 +68,15 @@ class FileBackedMemory:
         raw = handle.read()
         if not raw.strip():
             return []
-        payload = json.loads(raw)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(  # noqa: T201
+                f"[{utc_timestamp()}] warning: corrupt memory file detected at "
+                f"{self.path}; treating as empty memory ({exc})",
+                flush=True,
+            )
+            return []
         if isinstance(payload, list):
             return payload
         return payload.get("memories", [])
@@ -96,10 +104,12 @@ class FileBackedMemory:
                     "created_at": utc_timestamp(),
                 }
                 records.append(record)
-                handle.seek(0)
-                handle.truncate()
-                json.dump({"memories": records}, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+                tmp_path = self.path.with_name(f".{self.path.name}.tmp")
+                tmp_path.write_text(
+                    json.dumps({"memories": records}, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(tmp_path, self.path)
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         return {"id": record["id"]}

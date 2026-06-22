@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
+import computer_use_demo.harness.shared_task_queue as queue_module
 from computer_use_demo.harness.shared_task_queue import (
     claim_next_task,
     complete_task,
@@ -56,3 +60,21 @@ def test_concurrent_workers_complete_tasks_across_multiple_agents(tmp_path):
 
     assert len(completed_rows) == 18
     assert len(completed_agents) >= 3
+
+
+def test_claim_next_task_reports_locked_database_clearly(monkeypatch, tmp_path):
+    class LockedConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, _sql):
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue_module, "init_queue", lambda _db_path: None)
+    monkeypatch.setattr(queue_module, "connect", lambda _db_path: LockedConnection())
+
+    with pytest.raises(RuntimeError, match="task queue busy .*agent_id=agent-locked"):
+        claim_next_task("agent-locked", tmp_path / "task_queue.db")

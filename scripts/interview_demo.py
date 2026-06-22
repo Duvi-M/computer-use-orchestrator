@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from computer_use_demo.harness.runner import run_loop  # noqa: E402
+from computer_use_demo.harness.session_harness import SessionHarness  # noqa: E402
 from computer_use_demo.harness.shared_task_queue import (  # noqa: E402
     claim_next_task,
     complete_task,
@@ -26,6 +27,7 @@ from computer_use_demo.harness.shared_task_queue import (  # noqa: E402
 DEFAULT_MEMORY_FILE = Path("data") / "interview_harness_memory.json"
 DEFAULT_CHECKPOINT_DIR = Path("data") / "interview_checkpoints"
 DEFAULT_QUEUE_DB = Path("data") / "interview_task_queue.db"
+DEFAULT_SESSION_TRACE_DIR = Path("data") / "interview_session_harness_traces"
 
 
 def print_header(title: str) -> None:
@@ -136,6 +138,42 @@ def command_eval(_args: argparse.Namespace) -> int:
     return run_command([sys.executable, "evals/run_eval.py", "--json"])
 
 
+def command_session_harness(args: argparse.Namespace) -> int:
+    print_header("Real Worker Event Adapter Demo")
+    if args.reset:
+        reset_path(args.trace_dir)
+    harness = SessionHarness.create(
+        session_id=args.session_id,
+        goal_text=args.goal_text,
+        trace_dir=args.trace_dir,
+    )
+    harness.on_worker_event("assistant_block", {"text": "I will open the browser."})
+    harness.on_worker_event("tool_result", {"output": "Weather page loaded"})
+    harness.on_worker_event("done", {"ok": True})
+    trace_path = args.trace_dir / f"{args.session_id}.json"
+    print(  # noqa: T201
+        json.dumps(
+            {
+                "session_id": args.session_id,
+                "phase": harness.state.phase,
+                "observations": len(harness.state.observations),
+                "evidence": len(harness.state.evidence),
+                "eval_gates": [
+                    {
+                        "name": result.gate_name,
+                        "passed": result.passed,
+                    }
+                    for result in harness.eval_results
+                ],
+                "trace_path": str(trace_path),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def command_agents(args: argparse.Namespace) -> int:
     print_header("Parallel Agents With Shared Queue")
     if args.reset:
@@ -206,6 +244,11 @@ def command_map(_args: argparse.Namespace) -> int:
             "Evidence + budget + gate check.",
         ),
         (
+            "Runtime harness adapter",
+            "computer_use_demo/harness/session_harness.py",
+            "Worker events become observations, evidence, evals, and traces.",
+        ),
+        (
             "Parallel orchestration",
             "shared_task_queue.py + spawn_agents.sh",
             "Worktrees, tmux panes, single-writer queue.",
@@ -252,6 +295,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval", help="Run offline eval harness")
     eval_parser.set_defaults(func=command_eval)
+
+    session_harness = subparsers.add_parser(
+        "session-harness",
+        help="Map real worker-style events to harness state and trace",
+    )
+    session_harness.add_argument("--session-id", default="interview-session-harness")
+    session_harness.add_argument(
+        "--goal-text",
+        default="Open a browser, search Tokyo weather, and report the temperature.",
+    )
+    session_harness.add_argument("--trace-dir", type=Path, default=DEFAULT_SESSION_TRACE_DIR)
+    session_harness.add_argument("--reset", action=argparse.BooleanOptionalAction, default=True)
+    session_harness.set_defaults(func=command_session_harness)
 
     agents = subparsers.add_parser("agents", help="Run shared queue coordination demo")
     agents.add_argument("--agents", type=int, default=5)

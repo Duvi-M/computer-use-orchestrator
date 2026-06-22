@@ -50,4 +50,6 @@ verifiable workflow patterns without requiring a large framework.
   when not to use each pattern.
 - Demo parallel workflows write independent traces.
 - Docs explain when not to use workflows or agents.
-- Roadmap includes goal graph, queue, memory, locks, and worktree isolation.
+- Roadmap includes explicit goal graph, durable distributed queue, temporal
+  knowledge graph memory, production scheduler fairness metrics, and multi-host
+  locking.

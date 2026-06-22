@@ -76,7 +76,8 @@ web/
 - Define `ExecutionContract` for required outputs, budgets, grants,
   completion conditions, evidence paths, and escalation policy.
 - Define `RawTrace` and `TraceStore` for local durable traces.
-- Define `HarnessMemory` wrapper around local mem0.
+- Define `HarnessMemory` wrapper around file-backed local memory, with optional
+  mem0 backend when a valid OpenAI key is present.
 
 ## Phase 2: Implementation
 

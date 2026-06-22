@@ -1,80 +1,83 @@
-# Interview Demo
+# BOS.PRO Interview Demo
 
-This is the 10-minute live demo path for the Business Operating System / agentic
-harness interview. It is intentionally terminal-first: the point is to show
-spec-driven thinking, agent loop control, memory, evals, and orchestration.
+This is the 5-7 minute live demo path. Keep it terminal-first and show the
+project as an agentic harness, not primarily as a SaaS app.
 
-## Timing
-
-- 1 min: explain the product/harness framing.
-- 2 min: show specs and how implementation follows them.
-- 2 min: run the durable loop and memory recall.
-- 2 min: run evals and explain evidence gates.
-- 2 min: show parallel coordination and worktree isolation.
-- 1 min: show the SaaS control plane boundaries.
-
-## One-Sentence Pitch
-
-This project is a production-style control plane and harness for computer-use
-agents: it turns a goal into a bounded, observable loop with evidence, memory,
-eval gates, budgets, worker isolation, and recovery.
-
-## Preflight
+## Before The Call
 
 ```bash
 make interview-check
 ```
 
-If you do not want the full pytest suite during the live call, run this before
-the interview and keep the terminal output available.
+Optional cleanup:
 
-## 1. Spec-Driven Development
+```bash
+scripts/clean_demo_state.sh
+```
 
-Open these files:
+## 0. One-Sentence Setup
+
+Say:
+
+```text
+This is an agentic harness for computer-use agents: specs become contracts,
+contracts drive a goal/plan/action/evidence loop, worker events become
+observations and evidence, eval gates decide whether the agent is actually
+done, and traces/memory preserve state across runs.
+```
+
+## 1. Show Specs
+
+Open:
 
 ```text
 specs/agentic-harness.md
+specs/multi-agent-harness.md
 specs/spec-kit/agentic-harness/spec.md
 specs/spec-kit/agentic-harness/plan.md
 specs/spec-kit/agentic-harness/tasks.md
-specs/multi-agent-harness.md
-specs/spec-kit/multi-agent-harness/spec.md
 ```
 
-Talk track:
-
-- The repo keeps original brownfield specs and Spec Kit versions side by side.
-- Original specs are faster for evolving an existing codebase.
-- Spec Kit is cleaner for greenfield feature shape: `spec.md`, `plan.md`,
-  `tasks.md`.
-- The implementation is traceable from spec to tests.
-
-Quick map:
+Command:
 
 ```bash
 python3 scripts/interview_demo.py map
 ```
 
-## 2. Durable Agent Loop
+Talk track:
 
-```bash
-python3 scripts/interview_demo.py loop
-```
+- Custom specs are practical for brownfield evolution.
+- Spec Kit format is useful for greenfield structure.
+- The code is traceable back to requirements and tests.
 
-What to point out:
+## 2. Run tmux Harness Loop
 
-- `Goal -> Plan -> Action -> Observation -> Evidence -> Evaluation`.
-- The loop checkpoints frequently under `data/interview_checkpoints/`.
-- The loop can run inside tmux with `scripts/run_harness_tmux.sh`.
-- Checkpointing is separate from semantic memory.
-
-Optional tmux form:
+Use tmux if available:
 
 ```bash
 scripts/run_harness_tmux.sh harness-demo tokyo-run "search Tokyo weather"
 ```
 
-## 3. Memory Recall
+If tmux is noisy during the call, use bounded CLI mode:
+
+```bash
+python3 scripts/interview_demo.py loop
+```
+
+Show checkpoint:
+
+```bash
+cat data/interview_checkpoints/interview-loop.json
+```
+
+Talk track:
+
+- The loop is `goal -> plan -> action -> observation -> evidence ->
+  evaluation`.
+- Checkpoints are frequent so a run can survive terminal/SSH interruption.
+- Semantic memory is deduplicated; checkpoint ticks do not spam memory.
+
+## 3. Show Memory
 
 ```bash
 python3 scripts/interview_demo.py memory
@@ -89,50 +92,69 @@ memory recall query='search Osaka weather' -> 1 matches found
 Talk track:
 
 - Local demo uses file-backed memory by default.
-- Memories are deduplicated by semantic evidence signature.
-- mem0 is optional when a valid OpenAI key exists.
-- This is flat memory, not a temporal knowledge graph.
-- For a temporal knowledge graph, use something like Zep + Graphiti to track
-  entities, relationships, timestamps, and changing facts.
+- mem0 remains optional when a valid OpenAI key exists.
+- This is flat memory; temporal knowledge graph memory such as Zep + Graphiti is
+  roadmap for entity/relation/time-aware recall.
 
-## 4. Evals
+## 4. Show Runtime Adapter And Evals
 
 ```bash
+python3 scripts/interview_demo.py session-harness
 python3 scripts/interview_demo.py eval
 ```
 
 Talk track:
 
-- The agent saying “done” is not enough.
-- The eval checks evidence, terminal loop state, budgets, tool grants, and
-  emitted triggers.
-- This is the shape of `modification -> benchmark -> production`.
+- `SessionHarness` consumes worker-style events.
+- Events become observations, evidence, eval-gate results, and traces.
+- The worker execution path remains unchanged.
+- Evals prevent trusting “done” without evidence.
 
-## 5. Parallel Orchestration
+## 5. Run Parallel Agents
 
-Safe queue demo without tmux:
+Safe version:
 
 ```bash
 python3 scripts/interview_demo.py agents
 ```
 
-Real tmux/worktree demo:
+Real tmux/worktree version:
 
 ```bash
 scripts/spawn_agents.sh 3
 ```
 
+Show worktrees:
+
+```bash
+git worktree list
+```
+
+Show distribution:
+
+```bash
+python3 scripts/interview_demo.py agents --agents 6 --tasks 24
+```
+
 Talk track:
 
-- Each code-writing agent needs a separate git worktree.
-- Worktree isolation prevents write conflicts in the filesystem.
-- Shared work must go through a single-writer coordination point.
-- The SQLite queue uses `BEGIN IMMEDIATE` so two agents cannot claim the same
-  task.
+- One agent per git worktree prevents filesystem write conflicts.
+- Shared task list is SQLite-backed.
+- `BEGIN IMMEDIATE` gives a single-writer claim path.
+- Tasks complete across multiple agents without double assignment.
 
-## 6. SaaS Control Plane
+## 6. Explain FastAPI Backend As Runtime
 
-If Docker and Anthropic API are ready:
+Say:
+
+```text
+The FastAPI/Docker/noVNC system is the runtime backend. It gives the harness real
+worker events, SSE, session lifecycle, ownership checks, and a worker launcher
+boundary. It is secondary to the harness story, but it proves the harness can
+attach to a real Computer Use runtime.
+```
+
+Optional commands if Docker/API are ready:
 
 ```bash
 make build-worker
@@ -146,42 +168,23 @@ Open:
 http://127.0.0.1:5173
 http://127.0.0.1:9000/readyz
 http://127.0.0.1:9000/metrics
-http://127.0.0.1:9000/admin/retention
 ```
 
-Demo task:
+## Closing Line
+
+Say:
 
 ```text
-Open a browser, search for the current weather in Tokyo, and tell me the temperature.
+The main idea is not that the model is smarter. The harness makes agent work
+bounded, observable, resumable, and verifiable.
 ```
-
-Talk track:
-
-- FastAPI orchestrator owns session lifecycle, tenancy, quotas, SSE, noVNC
-  access, persistence, metrics, and retention.
-- `WorkerLauncher` keeps Docker-specific details behind a boundary.
-- Production would replace local auth, local Docker, local artifacts, and
-  development trust boundaries.
-
-## Requirement Map
-
-| Vacancy requirement | Repo signal | Demo command |
-| --- | --- | --- |
-| Spec-driven dev | `specs/` and `specs/spec-kit/` | `python3 scripts/interview_demo.py map` |
-| Agentic scaffolding | `computer_use_demo/harness/loop.py` | `python3 scripts/interview_demo.py loop` |
-| Memory layer | `computer_use_demo/harness/memory.py` | `python3 scripts/interview_demo.py memory` |
-| Evals | `evals/run_eval.py` | `python3 scripts/interview_demo.py eval` |
-| Parallel agents | worktrees + SQLite queue | `python3 scripts/interview_demo.py agents` |
-| Persistence | tmux + checkpoints | `scripts/run_harness_tmux.sh ...` |
-| SaaS orchestration | FastAPI + WorkerLauncher | `make run-api`, `make run-web` |
 
 ## Honest Limitations
 
-- This is not a hosted SaaS yet.
-- Local dev auth is not production auth.
-- Local Docker is a trust boundary.
-- File-backed memory is flat keyword memory, not a temporal knowledge graph.
-- The multi-agent demo shows coordination substrate, not independent reasoning
+- Not a hosted SaaS yet.
+- Local auth and local Docker are development trust boundaries.
+- File-backed memory is not a temporal knowledge graph.
+- Multi-agent demo shows coordination substrate, not independent reasoning
   agents.
-- Object storage, hosted deployment, billing, compliance, and remote worker
-  launchers remain production work.
+- Remote worker launcher, object storage, deployment, billing, and compliance
+  are production roadmap.

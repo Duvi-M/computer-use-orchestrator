@@ -30,6 +30,7 @@ from computer_use_demo.harness.loop import (
     Plan,
 )
 from computer_use_demo.harness.memory import HarnessMemory, MemoryRecord
+from computer_use_demo.harness.session_harness import SessionHarness
 from computer_use_demo.harness.tool_grants import ToolGrant, ToolGrantPolicy
 from computer_use_demo.harness.traces import RawTrace, TraceStore
 from computer_use_demo.harness.triggers import HarnessEvent, TriggerDispatcher
@@ -53,6 +54,7 @@ __all__ = [
     "Plan",
     "RawTrace",
     "SessionBudgets",
+    "SessionHarness",
     "ToolGrant",
     "ToolGrantPolicy",
     "TraceStore",

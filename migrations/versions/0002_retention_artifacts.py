@@ -4,11 +4,11 @@ Revision ID: 0002_retention_artifacts
 Revises: 0001_initial_saas_schema
 Create Date: 2026-06-10
 """
+
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0002_retention_artifacts"
 down_revision = "0001_initial_saas_schema"

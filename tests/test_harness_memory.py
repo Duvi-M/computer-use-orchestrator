@@ -167,6 +167,32 @@ def test_file_backed_memory_stores_and_recalls_by_keyword(tmp_path):
     assert memories[0]["metadata"]["goal_id"] == "goal-1"
 
 
+def test_file_backed_memory_treats_corrupt_json_as_empty(tmp_path, capsys):
+    memory_path = tmp_path / "memory.json"
+    memory_path.write_text("{not valid json", encoding="utf-8")
+    backend = FileBackedMemory(memory_path)
+
+    memories = backend.search("Tokyo weather", user_id=DEFAULT_MEMORY_USER_ID, limit=5)
+
+    output = capsys.readouterr().out
+    assert memories == []
+    assert "warning: corrupt memory file detected" in output
+
+
+def test_file_backed_memory_atomic_write_leaves_no_temp_file(tmp_path):
+    memory_path = tmp_path / "memory.json"
+    backend = FileBackedMemory(memory_path)
+
+    backend.add(
+        "Goal goal-1: Find Tokyo weather",
+        user_id=DEFAULT_MEMORY_USER_ID,
+        metadata={"goal_id": "goal-1"},
+    )
+
+    assert memory_path.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_file_backed_memory_dedupes_same_signature(tmp_path):
     backend = FileBackedMemory(tmp_path / "memory.json")
     metadata = {

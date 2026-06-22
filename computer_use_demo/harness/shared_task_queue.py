@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_QUEUE_DB = Path("data") / "task_queue.db"
+QUEUE_LOCK_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,11 @@ def utc_timestamp() -> str:
 
 def connect(db_path: Path = DEFAULT_QUEUE_DB) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=30.0, isolation_level=None)
+    conn = sqlite3.connect(
+        db_path,
+        timeout=QUEUE_LOCK_TIMEOUT_SECONDS,
+        isolation_level=None,
+    )
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -66,8 +71,8 @@ def claim_next_task(
 ) -> ClaimedTask | None:
     init_queue(db_path)
     with connect(db_path) as conn:
-        conn.execute("BEGIN IMMEDIATE")
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT id, status, assigned_agent, payload, updated_at
@@ -100,6 +105,16 @@ def claim_next_task(
                 payload=json.loads(row["payload"]),
                 updated_at=updated_at,
             )
+        except sqlite3.OperationalError as exc:
+            if "database is locked" in str(exc).lower():
+                raise RuntimeError(
+                    "task queue busy (database locked) after "
+                    f"{QUEUE_LOCK_TIMEOUT_SECONDS:g}s, agent_id={agent_id} "
+                    "- check for a stale lock or another process holding a "
+                    "long transaction."
+                ) from exc
+            conn.execute("ROLLBACK")
+            raise
         except Exception:
             conn.execute("ROLLBACK")
             raise

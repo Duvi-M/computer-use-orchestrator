@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import suppress
 
 import pytest
@@ -218,6 +219,32 @@ async def test_worker_event_persistence_used_by_sse_does_not_raise_name_error():
     assert history is not None
     assert history["events"][0]["event"] == "ready"
     assert history["events"][0]["data"] == {"ok": True}
+
+
+async def test_worker_events_feed_session_harness_trace(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_TRACE_DIR", str(tmp_path / "traces"))
+    session_id = "session-harness-events"
+    main.insert_session(session_id)
+    session = main.SessionState(session_id=session_id)
+    session.harness = main.SessionHarness.create(
+        session_id=session_id,
+        goal_text="search Tokyo weather",
+        budgets=main._session_harness_budgets(),
+    )
+    main.SESSIONS[session_id] = session
+
+    main._persist_worker_event(session_id, "assistant_block", {"text": "Opening browser"})
+    main._persist_worker_event(session_id, "tool_result", {"output": "Tokyo weather result"})
+    main._persist_worker_event(session_id, "done", {"ok": True})
+
+    trace_path = tmp_path / "traces" / f"{session_id}.json"
+    trace = json.loads(trace_path.read_text())
+
+    assert session.harness.state.evidence[0].kind == "answer"
+    assert all(result.passed for result in session.harness.eval_results)
+    assert trace["final_status"] == "completed"
+    assert trace["tool_events"][0]["event_type"] == "assistant_block"
+    assert trace["budget_usage"]["contract_id"] == f"contract-{session_id}"
 
 
 async def test_session_history_endpoint_still_returns_messages_and_events():
