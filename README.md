@@ -1,5 +1,558 @@
 # Agentic Harness for Computer-Use Agents
 
+## Русская Версия
+
+Spec-driven control plane для computer-use агентов: цель превращается в
+execution contract, план, ограниченные действия, observations, evidence,
+eval-gate решения, memory records, traces и escalation paths.
+
+Главная история репозитория - harness:
+
+```text
+Spec -> ExecutionContract -> AgentLoopState
+     -> Worker Events -> Observation/Evidence
+     -> EvalGates -> Traces/Memory
+     -> Next Step / Escalation
+```
+
+FastAPI/Docker/noVNC система остается реальным runtime backend для Claude
+Computer Use сессий. Она полезна, потому что harness может читать реальные
+worker-style события, но это не вся история продукта.
+
+Это пока не hosted SaaS. Это production-style agentic harness и runtime backend
+prototype, созданный, чтобы сделать выполнение агентом observable, bounded,
+recoverable и evidence-driven.
+
+### Что Это
+
+Репозиторий показывает, как строить основу для autonomous computer-use агентов:
+
+- spec-driven feature definitions в custom spec формате и вручную написанных
+  GitHub Spec Kit-style `spec.md` / `plan.md` / `tasks.md` файлах;
+- цикл `goal -> plan -> action -> observation -> evidence -> evaluation`;
+- execution contracts с required outputs, budgets, grants, completion
+  conditions и escalation policy;
+- eval gates, чтобы completion зависел от evidence, а не от self-reporting;
+- file-backed local memory с optional mem0 backend;
+- durable raw traces для replay, debugging и evals;
+- tmux/checkpoint persistence для long-running local agent loops;
+- parallel worktree-isolated agents через shared SQLite task queue;
+- FastAPI/Docker worker runtime как secondary surface для real Computer Use.
+
+Это намеренно не просто API wrapper вокруг Claude. Репозиторий моделирует
+control plane вокруг execution: specify, start, observe, constrain, persist,
+evaluate, remember и решить, что должно произойти дальше.
+
+### Статус Проекта
+
+Текущий статус: production-style agentic harness prototype.
+
+- Локально работает end-to-end: browser frontend, FastAPI orchestrator, Docker
+  worker, Claude Computer Use, SSE events, noVNC и persisted history.
+- Реализованы foundations для harness и runtime: specs, loop state, contracts,
+  budgets, eval gates, memory, traces, triggers, tmux persistence, parallel
+  queue demos, worker event adapter и FastAPI/Docker runtime integration.
+- Еще не реализовано: hosted auth, remote worker launcher, object storage,
+  deployment hardening, billing, compliance controls и production admin roles.
+
+### BOS.PRO Requirement Mapping
+
+| Requirement | Project Evidence | Status |
+| --- | --- | --- |
+| Spec-Driven Dev | `specs/`, `specs/spec-kit/`, `.specify/`, `specs/001-multi-agent-orchestration/`, `docs/INTERVIEW_DEMO.md` | Implemented: custom specs плюс GitHub Spec Kit-style файлы; также проверено official GitHub Spec Kit CLI через `specify init --here --force --integration claude` и `/speckit.specify` |
+| Agentic Scaffolding | `computer_use_demo/harness/` | Implemented |
+| Goal/Plan/Action Loop | `loop.py`, `runner.py`, `SessionHarness` | Implemented |
+| Execution Contracts | `contracts.py`, `ExecutionContract` | Implemented |
+| Budgets | `budgets.py`, API session limits | Implemented |
+| Eval Gates | `eval_gates.py`, `evals/run_eval.py` | Implemented |
+| Memory Layer | `memory.py` file-backed memory, optional mem0 | Implemented: file-backed local memory проверена live; mem0 backend подключен, но требует валидный OpenAI key и не является обязательным demo path |
+| Traces | `traces.py`, `SessionHarness` trace output | Implemented |
+| tmux persistence | `run_harness_tmux.sh`, checkpoints, tmux-resurrect/continuum | Verified live outside sandbox после реального macOS reboot |
+| Parallel agents | `interview_demo.py agents`, `spawn_agents.sh` | Implemented для local demo; 10+ agent / 100+ task load testing остается roadmap |
+| Worktree isolation | `spawn_agents.sh` | Implemented для local demo через git worktrees |
+| Shared task queue | `shared_task_queue.py` with `BEGIN IMMEDIATE` | Implemented locally через SQLite single-writer claims |
+| FastAPI/Docker runtime | `computer_use_demo/api/`, `WorkerLauncher` | Implemented as runtime backend |
+
+### Почему Это Harness
+
+Computer-use агенты дорогие, stateful и operationally risky. Им нужно больше,
+чем chat endpoint: worker isolation, session lifecycle controls, event
+streaming, desktop access, auditability, retention policy и ясные security
+boundaries.
+
+Harness responsibilities в этом репозитории:
+
+- session lifecycle: create/start/ready/run/complete/fail/delete;
+- isolated one-worker-per-session execution;
+- SSE event stream и persisted history;
+- runtime, idle, message и event budgets;
+- execution contracts и durable raw traces;
+- tool grant и eval-gate primitives;
+- protected noVNC access;
+- worker launcher abstraction;
+- observability и admin safety visibility.
+
+### Что Работает Сейчас
+
+- FastAPI orchestrator с session, message, history, health, readiness, metrics,
+  admin, UI-token и retention endpoints.
+- Dependency-free HTML/JS demo frontend.
+- Один local Docker worker container на каждую session.
+- Claude Computer Use execution внутри worker.
+- SSE event proxying и persistence.
+- noVNC desktop access через ownership-checked orchestrator URLs.
+- Local dev auth adapter с users, organizations, memberships и ownership checks.
+- Session limits, runtime/idle expiration, message/event quotas, kill switches и
+  worker cleanup.
+- `WorkerLauncher` protocol с `LocalDockerWorkerLauncher`.
+- SQLite default persistence плюс PostgreSQL/Alembic production path.
+- Artifact metadata и retention cleanup foundation.
+- Harness primitives: goals, plans, actions, observations, evidence, eval gates,
+  escalation decisions, execution contracts, budgets, tool grants, traces и
+  triggers.
+- `SessionHarness`, который мапит real worker-style events в observations,
+  evidence, eval-gate results и durable traces.
+- Local file-backed harness memory с optional mem0 backend.
+- Offline eval и safe parallel-session / parallel-workflow demo scripts.
+- Focused tests для auth, limits, UI tokens, launcher behavior, observability,
+  database config, migrations, retention, harness primitives и worker APIs.
+
+### Архитектура Harness
+
+```mermaid
+flowchart LR
+    Spec["Spec / Feature Intent"] --> Contract["ExecutionContract"]
+    Contract --> State["AgentLoopState"]
+    State --> Plan["Goal / Plan / Action"]
+    Plan --> Runtime["Worker Events"]
+    Runtime --> Obs["Observation"]
+    Runtime --> Ev["Evidence"]
+    Obs --> Gates["EvalGates"]
+    Ev --> Gates
+    Gates --> Trace["RawTrace / TraceStore"]
+    Gates --> Memory["HarnessMemory"]
+    Gates --> Decision["Next Step / Escalation"]
+```
+
+Подробнее: [docs/HARNESS_ARCHITECTURE.md](docs/HARNESS_ARCHITECTURE.md).
+
+### Runtime Backend: FastAPI + Docker Workers
+
+Runtime backend - это secondary surface, который дает harness реальные
+computer-use события.
+
+```text
+Frontend -> FastAPI orchestrator -> WorkerLauncher -> Docker worker
+         -> Claude Computer Use -> SSE/noVNC -> SQLite/Postgres history
+```
+
+noVNC не потерян: frontend открывает `/sessions/{id}/ui`, backend проверяет
+ownership/token rules и показывает iframe на worker noVNC URL.
+
+### Agent Loop
+
+Текущий Claude Computer Use loop все еще работает внутри worker. Harness
+экспонирует surrounding control model в `computer_use_demo/harness/`:
+
+```text
+goal -> plan -> action -> observation/evidence -> evaluation -> next step/escalation
+```
+
+CLI demo:
+
+```bash
+python3 -m computer_use_demo.harness.runner \
+  --goal-id tokyo-run \
+  --goal-text "search Tokyo weather" \
+  --interval-seconds 0.1 \
+  --max-iterations 8
+```
+
+Runner пишет checkpoints в `data/checkpoints/`, но semantic memory сохраняется
+только когда evidence content меняется.
+
+### Execution Contracts
+
+`ExecutionContract` делает каждую task/session явной до старта работы:
+
+- required outputs;
+- runtime/message/event/token/cost budgets;
+- permissions/tool grants;
+- completion conditions;
+- output/evidence paths;
+- escalation policy.
+
+Главный принцип: agent не выполняется свободно. Он работает внутри contract,
+который можно проверить budgets, eval gates, durable traces и human escalation.
+
+### Session Lifecycle
+
+Sessions проходят явные статусы: `created`, `starting`, `ready`, `running`,
+`completed`, `failed`, `stopped`, `expired`, `deleted`, `killed`.
+
+Orchestrator enforce-ит ownership, lifecycle validity, runtime/idle expiry,
+message limits, event limits и worker cleanup.
+
+### Worker Isolation
+
+Инвариант: один worker container на session. `LocalDockerWorkerLauncher`
+сохраняет local Docker behavior за `WorkerLauncher` protocol:
+
+- local port allocation;
+- container labels;
+- readiness checks;
+- CPU, memory и PID limits;
+- worker message/event/status/noVNC metadata;
+- orphan cleanup.
+
+Local Docker socket остается trusted-development boundary. Для production его
+нужно заменить на remote/internal launcher.
+
+### Budgets And Safety
+
+Реализованные budgets:
+
+- concurrent sessions per user/org;
+- max runtime;
+- max idle time;
+- max messages per session;
+- max events per session;
+- platform/global kill switches.
+
+Placeholders:
+
+- token budget;
+- provider cost budget.
+
+### Tool Grants
+
+`computer_use_demo/harness/tool_grants.py` моделирует session-level grants:
+
+- browser;
+- shell;
+- file system;
+- desktop/computer-use;
+- network.
+
+Сейчас worker остается trusted local demo infrastructure, а grant model - это
+explicit contract для будущего enforcement и review.
+
+### Durable Traces
+
+`TraceStore` пишет raw JSON traces, обычно в `data/traces/...`. Traces могут
+содержать session id, goal, actions, observations, tool calls/events, budget
+usage, final status, failure reason и artifact paths.
+
+### Evals
+
+Safe offline benchmark:
+
+```bash
+python3 evals/run_eval.py --json
+```
+
+Он симулирует session creation, worker readiness, goal execution, evidence
+recording, eval gates, budgets, triggers и session finish. Он не вызывает
+Anthropic, не запускает Docker и не требует Postgres.
+
+### Interview Demo CLI
+
+```bash
+python3 scripts/interview_demo.py map
+python3 scripts/interview_demo.py loop
+python3 scripts/interview_demo.py memory
+python3 scripts/interview_demo.py eval
+python3 scripts/interview_demo.py session-harness
+python3 scripts/interview_demo.py agents
+```
+
+Полный guide: [docs/INTERVIEW_DEMO.md](docs/INTERVIEW_DEMO.md).
+Русский interview guide: [docs/INTERVIEW_GUIDE_RU.md](docs/INTERVIEW_GUIDE_RU.md).
+
+### Dynamic Workflow Patterns
+
+Примеры в `examples/workflows/`:
+
+- `classify_and_act`;
+- `fan_out_and_synthesize`;
+- `adversarial_verification`;
+- `generate_and_filter`;
+- `tournament`;
+- `loop_until_done`.
+
+Реализовано сегодня: lightweight contracts, budgets, traces, eval gates,
+triggers, file-backed memory, SQLite single-writer task claims и safe parallel
+workflow simulation.
+
+Roadmap: live workflow runner, durable distributed queue, explicit goal graph,
+temporal knowledge graph memory, independent verifier service и production
+scheduling metrics.
+
+### Verification Strategy
+
+Harness не должен принимать “done” только по assertion. Completion должен быть
+evidence-based:
+
+- eval gates проверяют required evidence и terminal loop state;
+- execution contracts определяют required outputs;
+- raw traces сохраняют actions, observations, events, budgets и failure reasons;
+- independent verifier workflows документированы для high-risk tasks;
+- human-in-the-loop escalation используется для ambiguous/dangerous actions.
+
+### SaaS Evolution Summary
+
+Репозиторий эволюционировал из local prototype в SaaS-shaped architecture:
+
+- Identity and tenancy: local dev users, organizations, memberships, session
+  ownership checks.
+- Session safety: limits, expiration, caps, kill switches, lifecycle statuses.
+- Protected UI: ownership-checked noVNC и optional signed temporary UI tokens.
+- Worker boundary: `WorkerLauncher` protocol с local Docker implementation.
+- Observability: request IDs, readiness, metrics, internal admin visibility.
+- Persistence: SQLite local mode плюс PostgreSQL через Alembic migrations.
+- Retention: soft-deleted sessions, artifact metadata, screenshot foundation.
+
+Подробнее: [docs/SAAS_EVOLUTION.md](docs/SAAS_EVOLUTION.md).
+
+### Local Dev Vs Production
+
+Local/dev по умолчанию:
+
+- SQLite через `COMPUTER_USE_DB_PATH`;
+- local dev identity из `X-User-Id` / `X-Org-Id` или `DEV_USER_ID` /
+  `DEV_ORG_ID`;
+- Docker socket access из FastAPI process;
+- worker ports bound to localhost;
+- no hosted auth provider;
+- no object storage.
+
+Production-oriented foundations уже есть:
+
+- tenant ownership checks;
+- PostgreSQL-compatible schema и Alembic migrations;
+- signed UI access tokens;
+- session quotas и kill switches;
+- request IDs и operational endpoints;
+- retention и artifact metadata;
+- launcher abstraction для future remote worker backends.
+
+Для real hosted SaaS еще нужно:
+
+- OIDC/Auth0/Clerk/Cognito или аналогичный hosted auth;
+- remote/internal worker launcher вместо direct Docker socket access;
+- object storage для screenshots/artifacts;
+- production deployment, TLS, ingress и secrets management;
+- stronger sandboxing и network egress policy;
+- billing/cost ledger и provider usage reconciliation.
+
+### Quick Start
+
+Python 3.11 - самый безопасный local development version, потому что worker
+image использует Python 3.11.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r computer_use_demo/requirements.txt
+python -m pip install -r dev-requirements.txt
+
+export ANTHROPIC_API_KEY="your_anthropic_api_key"
+make build-worker
+make run-api
+```
+
+В другом терминале:
+
+```bash
+make run-web
+```
+
+Открыть:
+
+```text
+http://127.0.0.1:5173
+```
+
+### Core Commands
+
+```bash
+make test           # focused project tests
+make build-worker   # build computer-use-demo:local
+make run-api        # FastAPI on 127.0.0.1:9000
+make run-web        # static frontend on 127.0.0.1:5173
+make db-up          # optional local Postgres
+make db-migrate     # Alembic upgrade head
+make db-down        # stop optional local Postgres
+make smoke-local    # health/readiness/frontend smoke check
+make clean-workers  # remove project-labeled worker containers
+```
+
+### Release/Demo Checklist
+
+```bash
+python3 -B -m pytest -q
+node --check web/app.js
+make build-worker
+make db-migrate
+make run-api
+make run-web
+```
+
+Потом открыть `http://127.0.0.1:5173`, создать session, открыть noVNC,
+запустить Tokyo weather task и посмотреть `/readyz`, `/metrics`,
+`/admin/retention`.
+
+### Database Modes
+
+SQLite default:
+
+```bash
+unset DATABASE_URL
+export COMPUTER_USE_DB_PATH="./data/orchestrator.db"
+make run-api
+```
+
+Optional PostgreSQL:
+
+```bash
+make db-up
+export DATABASE_URL="postgresql://orchestrator:orchestrator@127.0.0.1:5432/orchestrator"
+make db-migrate
+make run-api
+```
+
+### Worker Launcher Model
+
+`WORKER_LAUNCHER=local_docker` - единственный implemented launcher. Он сохраняет
+one-container-per-session execution path, включая local port allocation, labels,
+readiness checks, CPU/memory/PID limits, SSE URLs, message URLs и noVNC metadata.
+
+Future launcher values (`ecs_fargate`, `fly_machines`, `remote_launcher`,
+`kubernetes`) - roadmap placeholders.
+
+### Security Boundaries
+
+- Session-scoped endpoints enforce ownership через user/org identity.
+- `ORCHESTRATOR_API_TOKEN` optionally protects API endpoints with bearer auth.
+- `/sessions/{id}/ui` ownership-checked; protected UI mode требует signed
+  temporary tokens.
+- Worker ports bound to localhost для local demo.
+- Docker socket access trusted-local only и должен быть заменен для hosted SaaS.
+- Secrets, `.env`, DB files, artifacts, logs и caches игнорируются git.
+
+Подробнее: [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md).
+
+### Observability
+
+Useful endpoints:
+
+```http
+GET /healthz
+GET /readyz
+GET /metrics
+GET /admin/sessions
+GET /admin/retention
+```
+
+Каждый HTTP response включает `X-Request-Id`. `LOG_FORMAT=json` включает
+single-line JSON logs.
+
+### Environment Reference
+
+Основные группы переменных перечислены в [.env.example](.env.example):
+
+- API/provider: `ANTHROPIC_API_KEY`, `MODEL`, `TOOL_VERSION`, `MAX_TOKENS`;
+- local auth: `DEV_USER_ID`, `DEV_ORG_ID`, `ORCHESTRATOR_API_TOKEN`;
+- persistence: `DATABASE_URL`, `COMPUTER_USE_DB_PATH`;
+- worker launcher: `WORKER_LAUNCHER`, `WORKER_IMAGE`, `WORKER_CONNECT_HOST`;
+- UI protection: `PROTECT_SESSION_UI`, `UI_TOKEN_SECRET`,
+  `UI_TOKEN_TTL_SECONDS`;
+- lifecycle limits: `MAX_CONCURRENT_SESSIONS_PER_USER`,
+  `MAX_CONCURRENT_SESSIONS_PER_ORG`, `MAX_SESSION_RUNTIME_SECONDS`,
+  `MAX_IDLE_SESSION_SECONDS`, `MAX_MESSAGES_PER_SESSION`,
+  `MAX_EVENTS_PER_SESSION`, `GLOBAL_KILL_SWITCH`;
+- observability: `LOG_LEVEL`, `LOG_FORMAT`.
+
+### Demo For Interview
+
+1. Run `make test`.
+2. Run `make build-worker`.
+3. Start the API: `make run-api`.
+4. Start the frontend: `make run-web`.
+5. Open `http://127.0.0.1:5173`.
+6. Click `Clear local`, then create a session.
+7. Click `Open noVNC`.
+8. Send a task:
+
+```text
+Open a browser, search for the current weather in Tokyo, and tell me the temperature.
+```
+
+9. Show live SSE events: `assistant_block`, `tool_use_start`, `tool_result`,
+   `screenshot`, `done`.
+10. Refresh and load `History`.
+11. Show `/readyz`, `/metrics`, `/admin/retention`.
+12. Explain SaaS boundaries: local auth adapter, one worker per session,
+    PostgreSQL-ready persistence, protected UI tokens, retention metadata, and
+    what remains before hosted SaaS.
+
+### Testing
+
+```bash
+ruff check computer_use_demo tests scripts
+python3 -B -m pytest -q
+node --check web/app.js
+python3 -m py_compile migrations/versions/*.py
+```
+
+Default pytest suite не требует live Postgres server или real Anthropic API call.
+
+### Known Limitations
+
+- Не hosted SaaS deployment.
+- Нет production auth provider или role-based admin authorization.
+- Local Docker socket access остается major trust boundary.
+- Active worker reattachment после orchestrator restart incomplete.
+- PostgreSQL access synchronous/minimal; pooling еще нет.
+- Artifact bytes - local files, не S3/object storage.
+- `/metrics` - JSON, не Prometheus format.
+- Frontend - demo console, не production SaaS UI.
+- File-backed harness memory - flat keyword recall; mem0 optional.
+- Parallel agent orchestration проверен как local thread-based demo; большие
+  10+ agent / 100+ task load tests остаются roadmap.
+
+### Roadmap
+
+- Hosted auth и role-aware admin APIs.
+- Remote/internal worker launcher.
+- Object storage для screenshots и artifacts.
+- Stronger worker isolation и network egress policy.
+- Cost ledger и billing integration.
+- Deployment profile with TLS, secrets management и observability backend.
+- Optional Prometheus/OpenTelemetry metrics/tracing.
+- Worker reattachment/reconciliation после orchestrator restart.
+- Temporal knowledge graph для session/evidence state.
+- Explicit goal graph/task graph beyond current SQLite demo queue.
+- Kubernetes launcher как later worker backend.
+- Production-grade multi-agent scheduling with 10+ agent / 100+ task load tests.
+- Distributed queue/lock backend for multi-host workers.
+
+### Additional Docs
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Harness Architecture](docs/HARNESS_ARCHITECTURE.md)
+- [SaaS Evolution](docs/SAAS_EVOLUTION.md)
+- [Security Model](docs/SECURITY_MODEL.md)
+- [Operations](docs/OPERATIONS.md)
+- [Interview Demo](docs/INTERVIEW_DEMO.md)
+- [Demo Script](docs/DEMO_SCRIPT.md)
+- [Specs](specs/README.md)
+- [Workflow Examples](examples/workflows/)
+
+---
+
+## English Version
+
 Spec-driven control plane for computer-use agents: goals become execution
 contracts, plans, bounded actions, observations, evidence, eval-gate decisions,
 memory records, traces, and escalation paths.
