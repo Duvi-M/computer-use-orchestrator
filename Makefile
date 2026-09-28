@@ -10,21 +10,21 @@ install:
 	.venv/bin/pip install -r dev-requirements.txt
 
 test:
-	.venv/bin/python -B -m pytest -q
+	$(PYTHON) -B -m pytest -q
 
 test-project:
-	.venv/bin/python -B -m pytest -q $(PROJECT_TESTS)
+	$(PYTHON) -B -m pytest -q $(PROJECT_TESTS)
 
 test-legacy:
 	@echo "Legacy Anthropic Computer Use tests require optional upstream dependencies such as anthropic and streamlit."
-	.venv/bin/python -B -m pytest -q -o "python_files=test_*.py *_test.py" $(LEGACY_TESTS)
+	$(PYTHON) -B -m pytest -q -o "python_files=test_*.py *_test.py" $(LEGACY_TESTS)
 
 test-all:
 	$(MAKE) test-project
 	$(MAKE) test-legacy
 
 smoke-local:
-	.venv/bin/python -B scripts/smoke_local.py
+	$(PYTHON) -B scripts/smoke_local.py
 
 interview-check:
 	$(PYTHON) -B scripts/interview_demo.py check
@@ -42,10 +42,10 @@ build-worker:
 	docker build -t $${WORKER_IMAGE:-computer-use-demo:local} .
 
 run-api:
-	.venv/bin/python -m uvicorn computer_use_demo.api.main:app --host 127.0.0.1 --port 9000
+	$(PYTHON) -m uvicorn computer_use_demo.api.main:app --host 127.0.0.1 --port 9000
 
 run-web:
-	.venv/bin/python -m http.server 5173 -d web
+	$(PYTHON) -m http.server 5173 -d web
 
 clean-workers:
 	docker rm -f $$(docker ps -aq --filter label=cambioml=orchestrator) 2>/dev/null || true
